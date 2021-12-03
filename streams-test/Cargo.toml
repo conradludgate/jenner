@@ -9,3 +9,5 @@ edition = "2021"
 streams-generator = { version = "=0.1.0", path = "../streams" }
 tokio = { version = "1.0", features = ["full"] }
 pin-project = "1"
+futures-core = "0.3"
+futures-util = "0.3"

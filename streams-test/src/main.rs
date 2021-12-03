@@ -1,13 +1,30 @@
-use std::{ops::Range, pin::Pin, task::{Context, Poll}, time::Duration, future::Future};
+use std::{
+    future::Future,
+    ops::Range,
+    pin::Pin,
+    task::{Context, Poll},
+    time::Duration,
+};
 
-use streams_generator::{stream_generator, GenState, StreamGenerator, StreamGeneratorLoop};
+use futures_core::Stream;
+use streams_generator::{
+    loops::{ForLoop, GenLoopState, StreamGeneratorLoop, StreamGeneratorLoopBody, GenLoopInnerState},
+    stream_generator, GenState, StreamGenerator,
+};
+use futures_util::{pin_mut, StreamExt};
 
-fn main() {
-    println!("Hello, world!");
+#[tokio::main]
+async fn main() {
+    let s = foo();
+    pin_mut!(s);
+
+    while let Some(value) = s.next().await {
+        println!("got {}", value);
+    }
 }
 
-fn foo() {
-    // for loop is just another internal stream?
+fn foo() -> impl Stream<Item = i32> {
+    // Ideally, the following stream_generator invocation would expand to the following FSM
 
     // stream_generator!{
     //     yield 10;
@@ -23,28 +40,14 @@ fn foo() {
     use ::streams_generator::pin_project;
 
     #[pin_project(project = __StreamGenerator_FiniteStateMachine1_Proj)]
-    enum __StreamGenerator_FiniteStateMachine1<SG1: StreamGeneratorLoop<(), Return = (), Yield = i32>> {
+    enum __StreamGenerator_FiniteStateMachine1 {
         Yield1(),
-        InnerStream1(#[pin] SG1),
+        InnerStream1(#[pin] ForLoop<(), Range<i32>, __StreamGenerator_FiniteStateMachine2>),
         Yield2(),
         Return1(),
     }
 
-    struct __StreamGenerator_ForLoop1<I1: Iterator> {
-        iterator: I1,
-        fsm: __StreamGenerator_FiniteStateMachine2<I1::Item>,
-    }
-
-    #[pin_project(project = __StreamGenerator_FiniteStateMachine2_Proj)]
-    enum __StreamGenerator_FiniteStateMachine2<i1> {
-        Await1(i1),
-        AwaitFut1(i1, #[pin] tokio::time::Sleep),
-        Yield1(i1),
-        Continue(),
-    }
-
-    impl<SG1: StreamGeneratorLoop<(), Return = (), Yield = i32>> StreamGenerator for __StreamGenerator_FiniteStateMachine1<SG1>
-    {
+    impl StreamGenerator for __StreamGenerator_FiniteStateMachine1 {
         type Yield = i32;
         type Return = ();
 
@@ -57,19 +60,19 @@ fn foo() {
                     let result = Poll::Ready(GenState::Yield(10));
 
                     self.set(__StreamGenerator_FiniteStateMachine1::InnerStream1(
-                        SG1::init(()),
+                        ForLoop::init(((), 0..10)),
                     ));
 
                     result
                 }
                 __StreamGenerator_FiniteStateMachine1_Proj::InnerStream1(inner) => {
                     match inner.poll_loop(cx) {
-                        Poll::Ready(GenState::Yield(y)) => Poll::Ready(GenState::Yield(y)),
-                        Poll::Ready(GenState::Break(())) => {
+                        Poll::Ready(GenLoopState::Yield(y)) => Poll::Ready(GenState::Yield(y)),
+                        Poll::Ready(GenLoopState::Break(())) => {
                             self.set(__StreamGenerator_FiniteStateMachine1::Yield2());
                             self.poll_resume(cx)
                         }
-                        Poll::Ready(GenState::Return(())) => {
+                        Poll::Ready(GenLoopState::Return(())) => {
                             self.set(__StreamGenerator_FiniteStateMachine1::Return1());
                             self.poll_resume(cx)
                         }
@@ -90,47 +93,62 @@ fn foo() {
         }
     }
 
+    #[pin_project(project = __StreamGenerator_FiniteStateMachine2_Proj)]
+    enum __StreamGenerator_FiniteStateMachine2 {
+        Await1(i32),
+        AwaitFut1(i32, #[pin] tokio::time::Sleep),
+        Yield1(i32),
+        Continue(),
+    }
 
-    impl StreamGenerator for __StreamGenerator_FiniteStateMachine2<i32> {
+    impl StreamGeneratorLoopBody for __StreamGenerator_FiniteStateMachine2 {
+        type Ctx = ((), i32);
+        fn init(ctx: Self::Ctx) -> Self {
+            __StreamGenerator_FiniteStateMachine2::Await1(ctx.1)
+        }
+
         type Yield = i32;
-        type Break = ();
         type Return = ();
+        type Break = ();
 
-        fn poll_resume(
+        fn poll_loop_body(
             mut self: Pin<&mut Self>,
             cx: &mut Context<'_>,
-        ) -> Poll<GenState<Self::Yield, Self::Break, Self::Return>> {
+        ) -> Poll<GenLoopInnerState<Self::Yield, Self::Break, Self::Return>>
+        {
             match self.as_mut().project() {
                 __StreamGenerator_FiniteStateMachine2_Proj::Await1(i) => {
                     let fut = tokio::time::sleep(Duration::from_secs(1));
 
-                    self.set(__StreamGenerator_FiniteStateMachine2::AwaitFut1(*i, fut));
-                    self.poll_resume(cx)
+                    let inner = __StreamGenerator_FiniteStateMachine2::AwaitFut1(*i, fut);
+                    self.set(inner);
+
+                    self.poll_loop_body(cx)
                 },
                 __StreamGenerator_FiniteStateMachine2_Proj::AwaitFut1(i, fut) => {
                     match fut.poll(cx) {
-                        Poll::Ready(_) => todo!(),
-                        Poll::Pending => todo!(),
+                        Poll::Ready(()) => {
+                            let inner = __StreamGenerator_FiniteStateMachine2::Yield1(*i);
+                            self.set(inner);
+                            self.poll_loop_body(cx)
+                        },
+                        Poll::Pending => Poll::Pending,
                     }
                 },
-                __StreamGenerator_FiniteStateMachine2_Proj::Yield1(_) => todo!(),
-                __StreamGenerator_FiniteStateMachine2_Proj::Continue() => todo!(),
+                __StreamGenerator_FiniteStateMachine2_Proj::Yield1(i) => {
+                    let result = Poll::Ready(GenLoopInnerState::Yield(*i));
+
+                    let inner = __StreamGenerator_FiniteStateMachine2::Continue();
+                    self.set(inner);
+
+                    result
+                },
+                __StreamGenerator_FiniteStateMachine2_Proj::Continue() => {
+                    Poll::Ready(GenLoopInnerState::Continue)
+                },
             }
         }
     }
+
+    streams_generator::Stream::new(__StreamGenerator_FiniteStateMachine1::Yield1())
 }
-
-// for i in x {
-//     ...
-// }
-
-// ->
-
-// let mut x = x.into_iter();
-// loop {
-//     let i = match x.next() {
-//         Some(i) => i,
-//         None => break,
-//     };
-//     ...
-// }
