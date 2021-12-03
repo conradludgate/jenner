@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use futures_core::Stream;
 use futures_util::{pin_mut, StreamExt};
-use streams_generator::{stream};
+use streams_generator::stream;
 
 #[tokio::main]
 async fn main() {

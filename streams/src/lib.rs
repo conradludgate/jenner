@@ -84,8 +84,6 @@ pub trait StreamGenerator {
     ) -> Poll<GeneratorState<Self::Yield, Self::Return>>;
 }
 
-
-
 // #[macro_export]
 // macro_rules! for_await {
 //     ($i:ident in $stream:expr => { $body:tt }) => {

@@ -1,5 +1,5 @@
-use proc_macro2::{TokenStream, TokenTree, Group};
-use quote::{quote_spanned};
+use proc_macro2::{Group, TokenStream, TokenTree};
+use quote::quote_spanned;
 use syn::{parse::Parse, Block, Result, Stmt};
 
 pub struct StreamGeneratorInput {
@@ -20,14 +20,12 @@ pub fn replace_async_for(input: impl IntoIterator<Item = TokenTree>) -> TokenStr
 
     while let Some(token) = input.next() {
         match token {
-            TokenTree::Ident(ident) => {
-                match input.peek() {
-                    Some(TokenTree::Ident(next)) if ident == "async" && next == "for" => {
-                        tokens.extend(quote_spanned! { ident.span() => #[async] });
-                    }
-                    _ => tokens.push(ident.into())
+            TokenTree::Ident(ident) => match input.peek() {
+                Some(TokenTree::Ident(next)) if ident == "async" && next == "for" => {
+                    tokens.extend(quote_spanned! { ident.span() => #[#ident] });
                 }
-            }
+                _ => tokens.push(ident.into()),
+            },
             TokenTree::Group(group) => {
                 let stream = replace_async_for(group.stream());
                 tokens.push(Group::new(group.delimiter(), stream).into());
