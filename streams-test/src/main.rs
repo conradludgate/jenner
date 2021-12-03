@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use futures_core::Stream;
 use futures_util::{pin_mut, StreamExt};
-use streams_generator::stream_generator;
+use streams_generator::stream;
 
 #[tokio::main]
 async fn main() {
@@ -16,11 +16,12 @@ async fn main() {
     }
 }
 
-#[stream_generator]
 fn zero_to_three() -> impl Stream<Item = u32> {
-    for i in 0..3 {
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        yield i;
+    stream!{
+        for i in 0..3 {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            yield i;
+        }
     }
 }
 

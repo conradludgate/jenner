@@ -4,62 +4,59 @@ use quote::ToTokens;
 use syn::{
     parse::Parse,
     parse_macro_input, parse_quote,
-    visit_mut::{visit_expr_mut, VisitMut, visit_expr_yield_mut},
-    AttributeArgs, Expr, ExprAwait, ExprYield, ItemFn, Result,
+    visit_mut::{visit_expr_mut, visit_expr_yield_mut, VisitMut},
+    Block, Expr, ExprAwait, ExprYield, Result, Stmt,
 };
 
-#[proc_macro_attribute]
-pub fn stream_generator(args: TokenStream1, input: TokenStream1) -> TokenStream1 {
-    let args = parse_macro_input!(args as AttributeArgs);
+#[proc_macro]
+pub fn stream(input: TokenStream1) -> TokenStream1 {
     let input = parse_macro_input!(input as StreamGeneratorInput);
 
     input
-        .process(args)
+        .process()
         .map_or_else(|e| e.to_compile_error(), ToTokens::into_token_stream)
         .into()
 }
 
 struct StreamGeneratorInput {
-    func: ItemFn,
+    stmts: Vec<Stmt>,
 }
 
 impl Parse for StreamGeneratorInput {
     fn parse(input: syn::parse::ParseStream) -> Result<Self> {
         Ok(StreamGeneratorInput {
-            func: input.parse()?,
+            stmts: Block::parse_within(input)?,
         })
     }
 }
 
 impl StreamGeneratorInput {
-    fn process(self, _args: AttributeArgs) -> Result<StreamGenerator> {
-        let Self { mut func } = self;
+    fn process(self) -> Result<StreamGenerator> {
+        let Self { mut stmts } = self;
 
-        let block = &mut func.block;
+        stmts
+            .iter_mut()
+            .for_each(|stmt| StreamGenVisitor.visit_stmt_mut(stmt));
 
-        StreamGenVisitor.visit_block_mut(block);
-
-        eprintln!("{}", block.into_token_stream());
-
-        *block = parse_quote! {
-            {
+        Ok(StreamGenerator {
+            stream: parse_quote! {
                 unsafe {
-                    ::streams_generator::new_stream(|mut __cx: ::streams_generator::UnsafeContextRef| #block )
+                    ::streams_generator::new_stream(|mut __cx: ::streams_generator::UnsafeContextRef| {
+                        #(#stmts)*
+                    })
                 }
-            }
-        };
-
-        Ok(StreamGenerator { func })
+            },
+        })
     }
 }
 
 struct StreamGenerator {
-    func: ItemFn,
+    stream: Expr,
 }
 
 impl ToTokens for StreamGenerator {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        self.func.to_tokens(tokens)
+        self.stream.to_tokens(tokens)
     }
 }
 
@@ -95,8 +92,8 @@ impl VisitMut for StreamGenVisitor {
         visit_expr_yield_mut(self, i);
         let ExprYield { attrs, expr, .. } = i;
 
-        let expr = expr.get_or_insert_with(|| Box::new(parse_quote!{ () }));
-        *expr = parse_quote!{
+        let expr = expr.get_or_insert_with(|| Box::new(parse_quote! { () }));
+        *expr = parse_quote! {
             ::std::task::Poll::Ready( #(#attrs)* { #expr } )
         };
     }

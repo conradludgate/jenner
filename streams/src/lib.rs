@@ -9,7 +9,7 @@ use std::{
     ptr::NonNull,
     task::{Context, Poll},
 };
-pub use streams_generator_macro::stream_generator;
+pub use streams_generator_macro::stream;
 
 /// `Send`-able wrapper around a `*mut Context`
 ///
