@@ -1,6 +1,6 @@
 #![feature(generator_trait)]
 
-use futures_core::Stream;
+use futures_core::{Future, Stream};
 pub use pin_project::pin_project;
 use std::{
     mem,
@@ -36,34 +36,46 @@ struct AsyncStream<G> {
 }
 
 #[doc(hidden)]
-pub unsafe fn new_stream<T, G>(generator: G) -> impl Stream<Item = T>
+pub unsafe fn new_stream_generator<Y, R, G>(generator: G) -> impl StreamGenerator<Y, R>
 where
-    G: Generator<UnsafeContextRef, Yield = Poll<T>, Return = ()>,
+    G: Generator<UnsafeContextRef, Yield = Poll<Y>, Return = R>,
 {
     AsyncStream { generator }
 }
 
-impl<T, G> Stream for AsyncStream<G>
+impl<Y, G> Stream for AsyncStream<G>
 where
-    G: Generator<UnsafeContextRef, Yield = Poll<T>, Return = ()>,
+    G: Generator<UnsafeContextRef, Yield = Poll<Y>>,
 {
-    type Item = T;
+    type Item = Y;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match self.project().generator.resume(cx.into()) {
             GeneratorState::Yielded(p) => p.map(Some),
-            GeneratorState::Complete(()) => Poll::Ready(None),
+            GeneratorState::Complete(_) => Poll::Ready(None),
         }
     }
 }
 
-impl<Y, G> StreamGenerator for AsyncStream<G>
+/// Future evaluates to the return value of the async stream
+impl<R, G> Future for AsyncStream<G>
 where
-    G: Generator<UnsafeContextRef, Yield = Poll<Y>>,
+    G: Generator<UnsafeContextRef, Return = R>,
 {
-    type Yield = Y;
-    type Return = G::Return;
+    type Output = R;
 
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match self.project().generator.resume(cx.into()) {
+            GeneratorState::Yielded(_) => Poll::Pending,
+            GeneratorState::Complete(r) => Poll::Ready(r),
+        }
+    }
+}
+
+impl<Y, R, G> StreamGenerator<Y, R> for AsyncStream<G>
+where
+    G: Generator<UnsafeContextRef, Yield = Poll<Y>, Return = R>,
+{
     fn poll_resume(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -75,30 +87,6 @@ where
     }
 }
 
-pub trait StreamGenerator {
-    type Yield;
-    type Return;
-    fn poll_resume(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<GeneratorState<Self::Yield, Self::Return>>;
+pub trait StreamGenerator<Y, R>: Stream<Item = Y> + Future<Output = R> {
+    fn poll_resume(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<GeneratorState<Y, R>>;
 }
-
-// #[macro_export]
-// macro_rules! for_await {
-//     ($i:ident in $stream:expr => { $body:tt }) => {
-//         let mut $stream = $stream;
-//         loop {
-//             let $stream = unsafe {
-//                 ::std::pin::Pin::new_unchecked(&mut $stream)
-//             };
-//             let $i = match ::futures_core::StreamExt::next($stream).await {
-//                 Some($i) => $i,
-//                 None => break;
-//             }
-//             {
-//                 $body
-//             }
-//         }
-//     };
-// }

@@ -1,9 +1,12 @@
+use proc_macro2::Ident;
+use quote::format_ident;
+use rand::{distributions::Alphanumeric, Rng};
 use syn::{
     parse_quote,
     visit_mut::{
         visit_block_mut, visit_expr_await_mut, visit_expr_mut, visit_expr_yield_mut, VisitMut,
     },
-    Expr, ExprAwait, ExprForLoop, ExprYield, Result,
+    Expr, ExprAwait, ExprForLoop, ExprYield, Result, Type,
 };
 
 use crate::{parse::StreamGeneratorInput, tokens::StreamGenerator};
@@ -12,14 +15,32 @@ impl StreamGeneratorInput {
     pub fn process(self) -> Result<StreamGenerator> {
         let Self { mut stmts } = self;
 
+        let random: String = rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(7)
+            .map(char::from)
+            .collect();
+        let mut visitor = StreamGenVisitor {
+            cx: format_ident!("__cx_{}", random),
+            yields: 0,
+        };
+
         stmts
             .iter_mut()
-            .for_each(|stmt| StreamGenVisitor.visit_stmt_mut(stmt));
+            .for_each(|stmt| visitor.visit_stmt_mut(stmt));
+
+        let StreamGenVisitor { cx, yields } = visitor;
+
+        let y: Type = if yields == 0 {
+            parse_quote!{ () }
+        } else {
+            parse_quote!{ _ }
+        };
 
         Ok(StreamGenerator {
             stream: parse_quote! {
                 unsafe {
-                    ::streams_generator::new_stream(|mut __cx: ::streams_generator::UnsafeContextRef| {
+                    ::streams_generator::new_stream_generator::<#y, _, _>(|mut #cx: ::streams_generator::UnsafeContextRef| {
                         #(#stmts)*
                     })
                 }
@@ -27,7 +48,10 @@ impl StreamGeneratorInput {
         })
     }
 }
-struct StreamGenVisitor;
+struct StreamGenVisitor {
+    pub cx: Ident,
+    pub yields: usize,
+}
 
 impl VisitMut for StreamGenVisitor {
     fn visit_expr_mut(&mut self, i: &mut syn::Expr) {
@@ -35,6 +59,7 @@ impl VisitMut for StreamGenVisitor {
             Expr::Await(await_) => {
                 visit_expr_await_mut(self, await_);
                 let ExprAwait { attrs, base, .. } = await_;
+                let cx = &self.cx;
                 *i = parse_quote! {{
                     let mut fut = #(#attrs)* { #base };
 
@@ -42,7 +67,7 @@ impl VisitMut for StreamGenVisitor {
                         let polled = unsafe {
                             ::std::future::Future::poll(
                                 ::std::pin::Pin::new_unchecked(&mut fut),
-                                __cx.get_context()
+                                #cx.get_context()
                             )
                         };
                         match polled {
@@ -73,7 +98,8 @@ impl VisitMut for StreamGenVisitor {
                     visit_expr_mut(self, expr);
                     visit_block_mut(self, body);
 
-                    *i = parse_quote! {{
+                    let cx = &self.cx;
+                    *i = parse_quote! {
                         #(#attrs)*
                         {
                             let mut stream = #expr;
@@ -82,7 +108,7 @@ impl VisitMut for StreamGenVisitor {
                                     let polled = unsafe {
                                         ::futures_core::stream::Stream::poll_next(
                                             ::std::pin::Pin::new_unchecked(&mut stream),
-                                            __cx.get_context()
+                                            #cx.get_context()
                                         )
                                     };
                                     match polled {
@@ -96,10 +122,10 @@ impl VisitMut for StreamGenVisitor {
                                 match next {
                                     Some(#pat) => #body,
                                     _ => break,
-                                }
+                                };
                             }
                         }
-                    }}
+                    }
                 } else {
                     visit_expr_mut(self, i)
                 }
@@ -109,6 +135,7 @@ impl VisitMut for StreamGenVisitor {
     }
 
     fn visit_expr_yield_mut(&mut self, i: &mut ExprYield) {
+        self.yields += 1;
         visit_expr_yield_mut(self, i);
         let ExprYield { attrs, expr, .. } = i;
 
