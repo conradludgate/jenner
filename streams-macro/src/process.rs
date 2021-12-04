@@ -32,9 +32,9 @@ impl StreamGeneratorInput {
         let StreamGenVisitor { cx, yields } = visitor;
 
         let y: Type = if yields == 0 {
-            parse_quote!{ () }
+            parse_quote! { () }
         } else {
-            parse_quote!{ _ }
+            parse_quote! { _ }
         };
 
         Ok(StreamGenerator {

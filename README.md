@@ -172,14 +172,14 @@ Since these generators are also functions that can return value,
 we can use the try `?` syntax to return early from functions.
 
 ```rust
-fn make_requests() -> impl StreamGenerator<u32, anyhow::Result<()>> {
+fn make_requests() -> impl Stream<Item = u32> + Future<Output = Result<(), &'static str>> {
     stream! {
         for i in 0..5 {
             let resp = async move {
                 // imagine this makes a http request that could fail
                 let req = if i == 4 { Err("4 is a random number") } else { Ok(i) };
                 req
-            }.await
+            }.await;
 
             // Using the `?` syntax to return early with the error
             // but continue with any good values. (can be used anywhere and not exclusively with yields)
@@ -191,3 +191,9 @@ fn make_requests() -> impl StreamGenerator<u32, anyhow::Result<()>> {
     }
 }
 ```
+
+This requires no extra special code, except for ensuring that the return type is well defined.
+In this case, that's performed by ensuring the return value is both `Stream + Future`, specifying the
+output of the future to be a result.
+
+This is also not exclusive to `Result`, any it supports anything that the regular `try` syntax supports.
