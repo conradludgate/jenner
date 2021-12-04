@@ -78,7 +78,7 @@ yield $expr
 into
 
 ```rust
-yield ::std::task::Poll::Ready($expr)
+yield Poll::Ready($expr)
 ```
 
 This allows the generator to tell the stream that a new value is now ready.
@@ -99,19 +99,12 @@ into
 ```rust
 {
     let mut fut = $expr;
-
     loop {
-        let polled = unsafe {
-            ::std::future::Future::poll(
-                ::std::pin::Pin::new_unchecked(&mut fut),
-                __cx.get_context()
-            )
-        };
+        let pinned = unsafe { Pin::new_unchecked(&mut fut) };
+        let polled = Future::poll(pinned, __cx.get_context());
         match polled {
-            ::std::task::Poll::Ready(r) => break r,
-            ::std::task::Poll::Pending => {
-                yield ::std::task::Poll::Pending;
-            }
+            Poll::Ready(r) => break r,
+            Poll::Pending => yield Poll::Pending,
         }
     }
 }
@@ -146,17 +139,11 @@ becomes
     let mut stream = $stream
     loop {
         let next = loop {
-            let polled = unsafe {
-                ::futures_core::stream::Stream::poll_next(
-                    ::std::pin::Pin::new_unchecked(&mut stream),
-                    __cx.get_context()
-                )
-            };
+            let pinned = unsafe { Pin::new_unchecked(&mut fut) };
+            let polled = Stream::poll_next(pinned, __cx.get_context());
             match polled {
-                ::std::task::Poll::Ready(r) => break r,
-                ::std::task::Poll::Pending => {
-                    yield::std::task::Poll::Pending;
-                }
+                Poll::Ready(r) => break r,
+                Poll::Pending => yield Poll::Pending,
             }
         };
         match next {
