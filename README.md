@@ -197,3 +197,45 @@ In this case, that's performed by ensuring the return value is both `Stream + Fu
 output of the future to be a result.
 
 This is also not exclusive to `Result`, any it supports anything that the regular `try` syntax supports.
+
+## Alternative syntax.
+
+This is not yet supported, but an idea. Instead of having a `stream!` expression level macro,
+we could instead have a `#[stream]` item level macro on a function.
+
+```rust
+// stream, no return value
+#[stream]
+async fn double(input: impl Stream<Item = u32>) yields i32 {
+    async for i in input {
+        yield i * 2;
+    }
+}
+
+// stream with return value
+#[stream]
+async fn make_requests() -> Result<(), &'static str> yields i32 {
+    for i in 0..5 {
+        let resp = async move {
+            // imagine this makes a http request that could fail
+            let req = if i == 4 { Err("4 is a random number") } else { Ok(i) };
+            req
+        }.await;
+        yield resp?;
+    }
+    Ok(())
+}
+
+// future only
+#[stream]
+async fn collect(input: impl Stream<Item = i32>) -> Vec<i32> {
+    let mut v = vec![];
+    async for i in input {
+        println!("got {:?}", i);
+        v.push(i)
+    }
+    v
+}
+```
+
+This is similar syntax to that proposed by [estebank](https://hackmd.io/9v81TQSgQcaAiqvHQtzN8w#Question-queue).
