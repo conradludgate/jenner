@@ -1,13 +1,11 @@
 [package]
-name = "streams-test"
+name = "jenner"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-streams-generator = { version = "=0.1.0", path = "../streams" }
-tokio = { version = "1.0", features = ["full"] }
-pin-project = "1"
+jenner-macro = { version = "=0.1.0", path = "../jenner-macro" }
 futures-core = "0.3"
-futures-util = "0.3"
+pin-project = "1"

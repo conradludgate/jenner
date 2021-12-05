@@ -1,19 +1,19 @@
 #![feature(generators)]
 #![feature(stmt_expr_attributes)]
 
-use futures_core::Stream;
+// use futures_core::Stream;
 use std::time::Duration;
-use streams_generator::generator;
+use jenner::{exports::Stream, generator};
 
 #[tokio::main]
 async fn main() {
-    let v = collect(double(zero_to_three())).await;
+    let v = collect(double(countdown())).await;
     assert_eq!(v, vec![8, 6, 4, 2, 0]);
 }
 
 #[generator]
 #[yields(u32)]
-async fn zero_to_three() {
+async fn countdown() {
     for i in (0..5).rev() {
         tokio::time::sleep(Duration::from_secs(1)).await;
         yield i;
@@ -42,58 +42,58 @@ async fn collect<T: std::fmt::Debug>(input: impl Stream<Item = T>) -> Vec<T> {
 
 // // The above functions expands into the following:
 //
-// fn zero_to_three() -> impl ::streams_generator::StreamGenerator<(u32), ()> {
+// fn countdown() -> impl ::jenner::StreamGenerator<(u32), ()> {
 //     unsafe {
-//         ::streams_generator::new_stream_generator(
-//             |mut __cx: ::streams_generator::UnsafeContextRef| {
+//         ::jenner::new_stream_generator(
+//             |mut __cx: ::jenner::UnsafeContextRef| {
 //                 for i in (0..5).rev() {
 //                     {
 //                         let mut fut = { tokio::time::sleep(Duration::from_secs(1)) };
 //                         loop {
 //                             let polled = unsafe {
-//                                 ::std::future::Future::poll(
-//                                     ::std::pin::Pin::new_unchecked(&mut fut),
+//                                 ::jenner::exports::Future::poll(
+//                                     ::jenner::exports::pin::Pin::new_unchecked(&mut fut),
 //                                     __cx.get_context(),
 //                                 )
 //                             };
 //                             match polled {
-//                                 ::std::task::Poll::Ready(r) => break r,
-//                                 ::std::task::Poll::Pending => {
-//                                     yield ::std::task::Poll::Pending;
+//                                 ::jenner::exports::task::Poll::Ready(r) => break r,
+//                                 ::jenner::exports::task::Poll::Pending => {
+//                                     yield ::jenner::exports::task::Poll::Pending;
 //                                 }
 //                             }
 //                         }
 //                     };
-//                     yield ::std::task::Poll::Ready({ i });
+//                     yield ::jenner::exports::task::Poll::Ready({ i });
 //                 }
 //             },
 //         )
 //     }
 // }
 //
-// fn double(input: impl Stream<Item = u32>) -> impl ::streams_generator::StreamGenerator<(u32), ()> {
+// fn double(input: impl Stream<Item = u32>) -> impl ::jenner::StreamGenerator<(u32), ()> {
 //     unsafe {
-//         ::streams_generator::new_stream_generator(
-//             |mut __cx: ::streams_generator::UnsafeContextRef| {
+//         ::jenner::new_stream_generator(
+//             |mut __cx: ::jenner::UnsafeContextRef| {
 //                 let mut stream = input;
 //                 loop {
 //                     let next = loop {
 //                         let polled = unsafe {
-//                             ::futures_core::stream::Stream::poll_next(
-//                                 ::std::pin::Pin::new_unchecked(&mut stream),
+//                             ::jenner::exports::Stream::poll_next(
+//                                 ::jenner::exports::pin::Pin::new_unchecked(&mut stream),
 //                                 __cx.get_context(),
 //                             )
 //                         };
 //                         match polled {
-//                             ::std::task::Poll::Ready(r) => break r,
-//                             ::std::task::Poll::Pending => {
-//                                 yield ::std::task::Poll::Pending;
+//                             ::jenner::exports::task::Poll::Ready(r) => break r,
+//                             ::jenner::exports::task::Poll::Pending => {
+//                                 yield ::jenner::exports::task::Poll::Pending;
 //                             }
 //                         }
 //                     };
 //                     match next {
 //                         Some(i) => {
-//                             yield ::std::task::Poll::Ready({ i * 2 });
+//                             yield ::jenner::exports::task::Poll::Ready({ i * 2 });
 //                         }
 //                         _ => break,
 //                     };
@@ -103,25 +103,25 @@ async fn collect<T: std::fmt::Debug>(input: impl Stream<Item = T>) -> Vec<T> {
 //     }
 // }
 //
-// fn collect<T: std::fmt::Debug>(input: impl Stream<Item = T>) -> impl ::streams_generator::StreamGenerator<(), Vec<T>> {
+// fn collect<T: std::fmt::Debug>(input: impl Stream<Item = T>) -> impl ::jenner::StreamGenerator<(), Vec<T>> {
 //     unsafe {
-//         ::streams_generator::new_stream_generator(
-//             |mut __cx: ::streams_generator::UnsafeContextRef| {
+//         ::jenner::new_stream_generator(
+//             |mut __cx: ::jenner::UnsafeContextRef| {
 //                 let mut v = ::alloc::vec::Vec::new();
 //                 {
 //                     let mut stream = input;
 //                     loop {
 //                         let next = loop {
 //                             let polled = unsafe {
-//                                 ::futures_core::stream::Stream::poll_next(
-//                                     ::std::pin::Pin::new_unchecked(&mut stream),
+//                                 ::jenner::exports::Stream::poll_next(
+//                                     ::jenner::exports::pin::Pin::new_unchecked(&mut stream),
 //                                     __cx.get_context(),
 //                                 )
 //                             };
 //                             match polled {
-//                                 ::std::task::Poll::Ready(r) => break r,
-//                                 ::std::task::Poll::Pending => {
-//                                     yield ::std::task::Poll::Pending;
+//                                 ::jenner::exports::task::Poll::Ready(r) => break r,
+//                                 ::jenner::exports::task::Poll::Pending => {
+//                                     yield ::jenner::exports::task::Poll::Pending;
 //                                 }
 //                             }
 //                         };

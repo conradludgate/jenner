@@ -1,7 +1,7 @@
 #![feature(generator_trait)]
 
 use futures_core::{Future, Stream};
-pub use pin_project::pin_project;
+use pin_project::pin_project;
 use std::{
     mem,
     ops::{Generator, GeneratorState},
@@ -9,7 +9,12 @@ use std::{
     ptr::NonNull,
     task::{Context, Poll},
 };
-pub use streams_generator_macro::{async_generator, generator};
+pub use jenner_macro::{async_generator, generator};
+
+pub mod exports {
+    pub use futures_core::{Future, Stream};
+    pub use std::{pin, task};
+}
 
 #[doc(hidden)]
 pub struct UnsafeContextRef(NonNull<Context<'static>>);

@@ -43,7 +43,7 @@ impl AsyncGeneratorExprInput {
         Ok(StreamExprGenerator {
             stream: parse_quote! {
                 unsafe {
-                    ::streams_generator::new_stream_generator::<#y, _, _>(|mut #cx: ::streams_generator::UnsafeContextRef| {
+                    ::jenner::new_stream_generator::<#y, _, _>(|mut #cx: ::jenner::UnsafeContextRef| {
                         #(#stmts)*
                     })
                 }
@@ -79,7 +79,7 @@ impl AsyncGeneratorItemInput {
         };
 
         sig.output =
-            parse_quote! { -> impl ::streams_generator::StreamGenerator<#yield_ty, #return_ty> };
+            parse_quote! { -> impl ::jenner::StreamGenerator<#yield_ty, #return_ty> };
 
         let random: String = rand::thread_rng()
             .sample_iter(&Alphanumeric)
@@ -102,7 +102,7 @@ impl AsyncGeneratorItemInput {
             stream: parse_quote! {
                 #(#attrs)* #vis #sig {
                     unsafe {
-                        ::streams_generator::new_stream_generator(|mut #cx: ::streams_generator::UnsafeContextRef| #block)
+                        ::jenner::new_stream_generator(|mut #cx: ::jenner::UnsafeContextRef| #block)
                     }
                 }
             },
@@ -127,15 +127,15 @@ impl VisitMut for StreamGenVisitor {
 
                     loop {
                         let polled = unsafe {
-                            ::std::future::Future::poll(
-                                ::std::pin::Pin::new_unchecked(&mut fut),
+                            ::jenner::exports::Future::poll(
+                                ::jenner::exports::pin::Pin::new_unchecked(&mut fut),
                                 #cx.get_context()
                             )
                         };
                         match polled {
-                            ::std::task::Poll::Ready(r) => break r,
-                            ::std::task::Poll::Pending => {
-                                yield ::std::task::Poll::Pending;
+                            ::jenner::exports::task::Poll::Ready(r) => break r,
+                            ::jenner::exports::task::Poll::Pending => {
+                                yield ::jenner::exports::task::Poll::Pending;
                             }
                         }
                     }
@@ -168,15 +168,15 @@ impl VisitMut for StreamGenVisitor {
                             #label loop {
                                 let next = loop {
                                     let polled = unsafe {
-                                        ::futures_core::stream::Stream::poll_next(
-                                            ::std::pin::Pin::new_unchecked(&mut stream),
+                                        ::jenner::exports::Stream::poll_next(
+                                            ::jenner::exports::pin::Pin::new_unchecked(&mut stream),
                                             #cx.get_context()
                                         )
                                     };
                                     match polled {
-                                        ::std::task::Poll::Ready(r) => break r,
-                                        ::std::task::Poll::Pending => {
-                                            yield ::std::task::Poll::Pending;
+                                        ::jenner::exports::task::Poll::Ready(r) => break r,
+                                        ::jenner::exports::task::Poll::Pending => {
+                                            yield ::jenner::exports::task::Poll::Pending;
                                         }
                                     }
                                 };
@@ -203,7 +203,7 @@ impl VisitMut for StreamGenVisitor {
 
         let expr = expr.get_or_insert_with(|| Box::new(parse_quote! { () }));
         *expr = parse_quote! {
-            ::std::task::Poll::Ready( #(#attrs)* { #expr } )
+            ::jenner::exports::task::Poll::Ready( #(#attrs)* { #expr } )
         };
     }
 }

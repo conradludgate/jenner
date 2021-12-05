@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "streams",
-    "streams-macro",
-    "streams-test"
+    "jenner",
+    "jenner-macro",
+    "jenner-test"
 ]

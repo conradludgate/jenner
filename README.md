@@ -1,4 +1,4 @@
-# streams-generator
+# jenner
 
 A proc-macro to make use of nightly generator syntax in order to create and manipulate
 streams using a much easier syntax, much akin to how async/await futures work today.
@@ -7,12 +7,12 @@ streams using a much easier syntax, much akin to how async/await futures work to
 
 ```rust
 #![feature(generators)] // required nightly feature
-use streams_generator::async_generator;
+use jenner::async_generator;
 use std::future::Future; // Futures provided by std
 use futures_core::Stream; // Streams provided by futures
 
 /// Creating brand new streams
-fn zero_to_three() -> impl Stream<Item = u32> {
+fn countdown() -> impl Stream<Item = u32> {
     async_generator! {
         for i in (0..5).rev() {
             // futures can be awaited in these streams
@@ -57,7 +57,7 @@ Firstly, the entire block body is wrapped in this expression
 
 ```rust
 unsafe {
-    ::streams_generator::new_stream_generator(|mut __cx: ::streams_generator::UnsafeContextRef|{
+    ::jenner::new_stream_generator(|mut __cx: ::jenner::UnsafeContextRef|{
         $body
     })
 }
