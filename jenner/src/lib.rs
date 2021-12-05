@@ -1,7 +1,230 @@
+//! A set of traits and proc-macros involved in making and using generators
+//! to create [`Stream`]s, [`Future`]s and [`Iterator`]s
+//!
+//! # Asynchronous example
+//!
+//! ```rust
+//! // a couple required nightly features
+//! #![feature(generators, stmt_expr_attributes)]
+//!
+//! use jenner::generator;
+//! use futures_core::Stream;
+//! use std::time::{Instant, Duration};
+//!
+//! /// Creates a stream that yields u32s that countdown from 5 to 0.
+//! /// Waiting 0.2s between each (1s total)
+//! #[generator]
+//! #[yields(u32)]
+//! async fn countdown() {
+//!     yield 5;
+//!     for i in (0..5).rev() {
+//!         tokio::time::sleep(Duration::from_millis(200)).await;
+//!         yield i;
+//!     }
+//! }
+//!
+//! /// Iterates over the provided stream, printing the value and
+//! /// pushing it to a vec that is returned
+//! #[generator]
+//! async fn collect(input: impl Stream<Item = u32>) -> Vec<u32> {
+//!     let mut v = vec![];
+//!
+//!     // special syntax to consume a stream while still
+//!     // preserving safety and control flow
+//!     #[async_for]
+//!     for i in input {
+//!         println!("{:?}", i);
+//!         v.push(i)
+//!     }
+//!
+//!     v
+//! }
+//!
+//! #[tokio::main]
+//! async fn main() {
+//!     let start = Instant::now();
+//!
+//!     // countdown() is a valid stream
+//!     // collect(...) is a valid future
+//!     let v = collect(countdown()).await;
+//!     assert_eq!(v, vec![5, 4, 3, 2, 1, 0]);
+//!
+//!     assert!(start.elapsed() > Duration::from_millis(200 * 5));
+//! }
+//! ```
+//!
+//! # Synchronous example
+//!
+//! ```rust
+//! #![feature(generators)]
+//!
+//! use jenner::generator;
+//!
+//! #[generator]
+//! #[yields(usize)]
+//! fn fibonacii() {
+//!     use std::mem;
+//!
+//!     let mut a = 0;
+//!     let mut b = 1;
+//!     loop {
+//!         yield a;
+//!
+//!         mem::swap(&mut a, &mut b);
+//!         b += a;
+//!     }
+//! }
+//!
+//! fn main() {
+//!     // fibonacii() is a valid `Iterator<Item = usize>`
+//!     let v: Vec<_> = fibonacii().take(10).collect();
+//!     assert_eq!(v, vec![0, 1, 1, 2, 3, 5, 8, 13, 21, 34]);
+//! }
+//! ```
+
 #![feature(generator_trait)]
 
 use futures_core::{Future, Stream};
-pub use jenner_macro::{async_generator, generator};
+
+/// From the provided generator body, it creates an `impl [AsyncGenerator]<Y, R>` type that implements
+/// both `Future<Output = R>` and `Stream<Item = Y>`.
+///
+/// ```
+/// #![feature(generators)]
+///
+/// use jenner::async_generator;
+/// use futures_core::Stream;
+/// use std::future::Future;
+/// use std::time::{Instant, Duration};
+///
+/// /// Creates a stream that yields u32s that countdown from 5 to 0.
+/// /// Waiting 0.2s between each (1s total)
+/// fn countdown() -> impl Stream<Item = u32> {
+///     async_generator!{
+///         yield 5;
+///         for i in (0..5).rev() {
+///             tokio::time::sleep(Duration::from_millis(200)).await;
+///             yield i;
+///         }
+///     }
+/// }
+///
+/// /// Iterates over the provided stream, printing the value and
+/// /// pushing it to a vec that is returned
+/// fn collect(input: impl Stream<Item = u32>) -> impl Future<Output = Vec<u32>> {
+///     async_generator!{
+///         let mut v = vec![];
+///
+///         // special syntax to consume a stream while still
+///         // preserving safety and control flow
+///         async for i in input {
+///             println!("{:?}", i);
+///             v.push(i)
+///         }
+///
+///         v
+///     }
+/// }
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let start = Instant::now();
+///
+///     // countdown() is a valid stream
+///     // collect(...) is a valid future
+///     let v = collect(countdown()).await;
+///     assert_eq!(v, vec![5, 4, 3, 2, 1, 0]);
+///
+///     assert!(start.elapsed() > Duration::from_millis(200 * 5));
+/// }
+/// ```
+pub use jenner_macro::async_generator;
+
+/// Apply to a function to convert it into an iterator, allowing the use of the `yield` keyword.
+/// Iterators can be synchronous or asynchronous.
+///
+/// # Asynchronous example
+///
+/// ```
+/// // a couple required nightly features
+/// #![feature(generators, stmt_expr_attributes)]
+///
+/// use jenner::generator;
+/// use futures_core::Stream;
+/// use std::time::{Instant, Duration};
+///
+/// /// Creates a stream that yields u32s that countdown from 5 to 0.
+/// /// Waiting 0.2s between each (1s total)
+/// #[generator]
+/// #[yields(u32)]
+/// async fn countdown() {
+///     yield 5;
+///     for i in (0..5).rev() {
+///         tokio::time::sleep(Duration::from_millis(200)).await;
+///         yield i;
+///     }
+/// }
+///
+/// /// Iterates over the provided stream, printing the value and
+/// /// pushing it to a vec that is returned
+/// #[generator]
+/// async fn collect(input: impl Stream<Item = u32>) -> Vec<u32> {
+///     let mut v = vec![];
+///
+///     // special syntax to consume a stream while still
+///     // preserving safety and control flow
+///     #[async_for]
+///     for i in input {
+///         println!("{:?}", i);
+///         v.push(i)
+///     }
+///
+///     v
+/// }
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let start = Instant::now();
+///
+///     // countdown() is a valid stream
+///     // collect(...) is a valid future
+///     let v = collect(countdown()).await;
+///     assert_eq!(v, vec![5, 4, 3, 2, 1, 0]);
+///
+///     assert!(start.elapsed() > Duration::from_millis(200 * 5));
+/// }
+/// ```
+///
+/// # Synchronous example ([`Iterator`])
+///
+/// ```
+/// #![feature(generators)]
+///
+/// use jenner::generator;
+///
+/// #[generator]
+/// #[yields(usize)]
+/// fn fibonacii() {
+///     use std::mem;
+///
+///     let mut a = 0;
+///     let mut b = 1;
+///     loop {
+///         yield a;
+///
+///         mem::swap(&mut a, &mut b);
+///         b += a;
+///     }
+/// }
+///
+/// fn main() {
+///     // fibonacii() is a valid `Iterator<Item = usize>`
+///     let v: Vec<_> = fibonacii().take(10).collect();
+///     assert_eq!(v, vec![0, 1, 1, 2, 3, 5, 8, 13, 21, 34]);
+/// }
+/// ```
+pub use jenner_macro::generator;
+
 use pin_project::pin_project;
 use std::{
     mem,
@@ -11,7 +234,8 @@ use std::{
     task::{Context, Poll},
 };
 
-pub mod exports {
+#[doc(hidden)]
+pub mod __private {
     pub use futures_core::{Future, Stream};
     pub use std::{pin, task};
 }
@@ -100,16 +324,30 @@ where
     }
 }
 
+/// This trait is a combination of [`Stream`], [`Future`] and [`Generator`] all in one neat package.
 pub trait AsyncGenerator<Y, R>: Stream<Item = Y> + Future<Output = R> {
+    /// Poll the async generator, resuming it's execution until the next yield or await.
+    ///
+    /// Possible outcomes:
+    ///     `future.poll()` is `Pending` => returns `Poll::Pending`,
+    ///     `future.poll()` is `Ready(_)` => execution of generator continues until next yield point,
+    ///     `yield item;` => returns `Poll::Ready(GeneratorState::Yielded(item))`,
+    ///     `return item;` => returns `Poll::Ready(GeneratorState::Completed(item))`,
     fn poll_resume(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<GeneratorState<Y, R>>;
 }
 
+/// This trait is a combination of [`Iterator`], [`Finally`] and [`Generator`] all in one neat package.
 pub trait SyncGenerator<Y, R>: Iterator<Item = Y> + Finally<Output = R> {
+    /// Same as [`Generator::resume`] but with no argument, to match normal iterators
     fn resume(self: Pin<&mut Self>) -> GeneratorState<Y, R>;
 }
 
+/// This allows synchronous generators a way to return a value
+/// once the execution is complete.
 pub trait Finally {
+    /// Type to return
     type Output;
+    /// Consume to get the output.
     fn finally(self) -> Self::Output;
 }
 

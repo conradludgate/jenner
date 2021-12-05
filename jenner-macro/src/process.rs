@@ -12,9 +12,8 @@ use syn::{
 use crate::parse::{AttrGenerator, ExprGenerator};
 
 impl ExprGenerator {
-    pub fn process(mut self) -> Result<Expr> {
-        let visitor = GenVisitor::new(false);
-        Ok(visitor.into_generator(&mut self.stmts))
+    pub fn process(mut self) -> Expr {
+        GenVisitor::new(false).into_generator(&mut self.stmts)
     }
 }
 
@@ -112,15 +111,15 @@ impl VisitMut for GenVisitor {
 
                     loop {
                         let polled = unsafe {
-                            ::jenner::exports::Future::poll(
-                                ::jenner::exports::pin::Pin::new_unchecked(&mut fut),
+                            ::jenner::__private::Future::poll(
+                                ::jenner::__private::pin::Pin::new_unchecked(&mut fut),
                                 #cx.get_context()
                             )
                         };
                         match polled {
-                            ::jenner::exports::task::Poll::Ready(r) => break r,
-                            ::jenner::exports::task::Poll::Pending => {
-                                yield ::jenner::exports::task::Poll::Pending;
+                            ::jenner::__private::task::Poll::Ready(r) => break r,
+                            ::jenner::__private::task::Poll::Pending => {
+                                yield ::jenner::__private::task::Poll::Pending;
                             }
                         }
                     }
@@ -153,15 +152,15 @@ impl VisitMut for GenVisitor {
                             #label loop {
                                 let next = loop {
                                     let polled = unsafe {
-                                        ::jenner::exports::Stream::poll_next(
-                                            ::jenner::exports::pin::Pin::new_unchecked(&mut stream),
+                                        ::jenner::__private::Stream::poll_next(
+                                            ::jenner::__private::pin::Pin::new_unchecked(&mut stream),
                                             #cx.get_context()
                                         )
                                     };
                                     match polled {
-                                        ::jenner::exports::task::Poll::Ready(r) => break r,
-                                        ::jenner::exports::task::Poll::Pending => {
-                                            yield ::jenner::exports::task::Poll::Pending;
+                                        ::jenner::__private::task::Poll::Ready(r) => break r,
+                                        ::jenner::__private::task::Poll::Pending => {
+                                            yield ::jenner::__private::task::Poll::Pending;
                                         }
                                     }
                                 };
@@ -174,7 +173,7 @@ impl VisitMut for GenVisitor {
                         }
                     }
                 } else {
-                    visit_expr_mut(self, i)
+                    visit_expr_mut(self, i);
                 }
             }
             i => visit_expr_mut(self, i),
@@ -188,7 +187,7 @@ impl VisitMut for GenVisitor {
 
         let expr = expr.get_or_insert_with(|| Box::new(parse_quote! { () }));
         *expr = parse_quote! {
-            ::jenner::exports::task::Poll::Ready( #(#attrs)* { #expr } )
+            ::jenner::__private::task::Poll::Ready( #(#attrs)* { #expr } )
         };
     }
 }

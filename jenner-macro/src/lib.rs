@@ -19,10 +19,7 @@ pub fn async_generator(input: TokenStream1) -> TokenStream1 {
         }
     };
 
-    input
-        .process()
-        .map_or_else(|e| e.to_compile_error(), ToTokens::into_token_stream)
-        .into()
+    input.process().into_token_stream().into()
 }
 
 #[proc_macro_attribute]

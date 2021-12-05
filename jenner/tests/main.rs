@@ -1,20 +1,25 @@
 #![feature(generators)]
 #![feature(stmt_expr_attributes)]
 
-use jenner::{exports::Stream, generator};
-use std::time::Duration;
+use futures_core::Stream;
+use jenner::generator;
+use std::time::{Duration, Instant};
 
 #[tokio::test]
 async fn streams() {
+    let start = Instant::now();
     let v = collect(double(countdown())).await;
-    assert_eq!(v, vec![8, 6, 4, 2, 0]);
+    assert_eq!(v, vec![10, 8, 6, 4, 2, 0]);
+    // expected to take around a second;
+    assert!(start.elapsed() > Duration::from_millis(200 * 5));
 }
 
 #[generator]
 #[yields(u32)]
 async fn countdown() {
+    yield 5;
     for i in (0..5).rev() {
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
         yield i;
     }
 }
