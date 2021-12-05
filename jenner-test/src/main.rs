@@ -1,7 +1,6 @@
 #![feature(generators)]
 #![feature(stmt_expr_attributes)]
 
-// use futures_core::Stream;
 use std::time::Duration;
 use jenner::{exports::Stream, generator};
 
