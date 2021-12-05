@@ -1,18 +1,21 @@
-use proc_macro2::Ident;
+use proc_macro2::{Ident, Span};
 use quote::format_ident;
 use rand::{distributions::Alphanumeric, Rng};
 use syn::{
-    parse_quote,
+    parse2, parse_quote,
     visit_mut::{
         visit_block_mut, visit_expr_await_mut, visit_expr_mut, visit_expr_yield_mut, VisitMut,
     },
-    Expr, ExprAwait, ExprForLoop, ExprYield, Result, Type,
+    Error, Expr, ExprAwait, ExprForLoop, ExprYield, ItemFn, Result, Type,
 };
 
-use crate::{parse::StreamGeneratorInput, tokens::StreamGenerator};
+use crate::{
+    parse::{AsyncGeneratorExprInput, AsyncGeneratorItemInput},
+    tokens::{StreamExprGenerator, StreamItemGenerator},
+};
 
-impl StreamGeneratorInput {
-    pub fn process(self) -> Result<StreamGenerator> {
+impl AsyncGeneratorExprInput {
+    pub fn process(self) -> Result<StreamExprGenerator> {
         let Self { mut stmts } = self;
 
         let random: String = rand::thread_rng()
@@ -37,7 +40,7 @@ impl StreamGeneratorInput {
             parse_quote! { _ }
         };
 
-        Ok(StreamGenerator {
+        Ok(StreamExprGenerator {
             stream: parse_quote! {
                 unsafe {
                     ::streams_generator::new_stream_generator::<#y, _, _>(|mut #cx: ::streams_generator::UnsafeContextRef| {
@@ -48,6 +51,65 @@ impl StreamGeneratorInput {
         })
     }
 }
+
+impl AsyncGeneratorItemInput {
+    pub fn process(self) -> Result<StreamItemGenerator> {
+        let ItemFn {
+            mut attrs,
+            vis,
+            mut sig,
+            mut block,
+        } = self.func;
+
+        if sig.asyncness.take().is_none() {
+            return Err(Error::new(Span::call_site(), "function must be async"));
+        }
+
+        let return_ty = match sig.output {
+            syn::ReturnType::Default => parse_quote! { () },
+            syn::ReturnType::Type(_, t) => t,
+        };
+
+        let yields = attrs
+            .drain_filter(|attr| attr.path.get_ident().map_or(false, |i| i == "yields"))
+            .next();
+        let yield_ty: Type = match yields {
+            Some(t) => parse2(t.tokens)?,
+            None => parse_quote! { () },
+        };
+
+        sig.output =
+            parse_quote! { -> impl ::streams_generator::StreamGenerator<#yield_ty, #return_ty> };
+
+        let random: String = rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(7)
+            .map(char::from)
+            .collect();
+        let mut visitor = StreamGenVisitor {
+            cx: format_ident!("__cx_{}", random),
+            yields: 0,
+        };
+
+        block
+            .stmts
+            .iter_mut()
+            .for_each(|stmt| visitor.visit_stmt_mut(stmt));
+
+        let StreamGenVisitor { cx, .. } = visitor;
+
+        Ok(StreamItemGenerator {
+            stream: parse_quote! {
+                #(#attrs)* #vis #sig {
+                    unsafe {
+                        ::streams_generator::new_stream_generator(|mut #cx: ::streams_generator::UnsafeContextRef| #block)
+                    }
+                }
+            },
+        })
+    }
+}
+
 struct StreamGenVisitor {
     pub cx: Ident,
     pub yields: usize,
@@ -82,7 +144,7 @@ impl VisitMut for StreamGenVisitor {
             Expr::ForLoop(for_loop) => {
                 let async_attrs = for_loop
                     .attrs
-                    .drain_filter(|attr| attr.path.get_ident().map_or(false, |i| i == "async"))
+                    .drain_filter(|attr| attr.path.get_ident().map_or(false, |i| i == "async_for"))
                     .count();
 
                 if async_attrs > 0 {

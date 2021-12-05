@@ -9,7 +9,7 @@ use std::{
     ptr::NonNull,
     task::{Context, Poll},
 };
-pub use streams_generator_macro::stream;
+pub use streams_generator_macro::{async_generator, generator};
 
 #[doc(hidden)]
 pub struct UnsafeContextRef(NonNull<Context<'static>>);

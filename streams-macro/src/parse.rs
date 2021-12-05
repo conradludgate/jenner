@@ -1,14 +1,14 @@
 use proc_macro2::{Group, TokenStream, TokenTree};
-use quote::quote_spanned;
-use syn::{parse::Parse, Block, Result, Stmt};
+use quote::{format_ident, quote_spanned};
+use syn::{parse::Parse, Block, ItemFn, Result, Stmt};
 
-pub struct StreamGeneratorInput {
+pub struct AsyncGeneratorExprInput {
     pub stmts: Vec<Stmt>,
 }
 
-impl Parse for StreamGeneratorInput {
+impl Parse for AsyncGeneratorExprInput {
     fn parse(input: syn::parse::ParseStream) -> Result<Self> {
-        Ok(StreamGeneratorInput {
+        Ok(AsyncGeneratorExprInput {
             stmts: Block::parse_within(input)?,
         })
     }
@@ -22,7 +22,8 @@ pub fn replace_async_for(input: impl IntoIterator<Item = TokenTree>) -> TokenStr
         match token {
             TokenTree::Ident(ident) => match input.peek() {
                 Some(TokenTree::Ident(next)) if ident == "async" && next == "for" => {
-                    tokens.extend(quote_spanned! { ident.span() => #[#ident] });
+                    let async_for = format_ident!("{}_for", ident);
+                    tokens.extend(quote_spanned! { ident.span() => #[#async_for] });
                 }
                 _ => tokens.push(ident.into()),
             },
@@ -35,4 +36,16 @@ pub fn replace_async_for(input: impl IntoIterator<Item = TokenTree>) -> TokenStr
     }
 
     tokens.into_iter().collect()
+}
+
+pub struct AsyncGeneratorItemInput {
+    pub func: ItemFn,
+}
+
+impl Parse for AsyncGeneratorItemInput {
+    fn parse(input: syn::parse::ParseStream) -> Result<Self> {
+        Ok(AsyncGeneratorItemInput {
+            func: input.parse()?,
+        })
+    }
 }

@@ -1,10 +1,9 @@
 #![feature(generators)]
-
-use std::future::Future;
-use std::time::Duration;
+#![feature(stmt_expr_attributes)]
 
 use futures_core::Stream;
-use streams_generator::stream;
+use std::time::Duration;
+use streams_generator::generator;
 
 #[tokio::main]
 async fn main() {
@@ -12,39 +11,40 @@ async fn main() {
     assert_eq!(v, vec![8, 6, 4, 2, 0]);
 }
 
-fn zero_to_three() -> impl Stream<Item = u32> {
-    stream! {
-        for i in (0..5).rev() {
-            tokio::time::sleep(Duration::from_secs(1)).await;
-            yield i;
-        }
+#[generator]
+#[yields(u32)]
+async fn zero_to_three() {
+    for i in (0..5).rev() {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        yield i;
     }
 }
 
-fn double(input: impl Stream<Item = u32>) -> impl Stream<Item = u32> {
-    stream! {
-        async for i in input {
-            yield i * 2;
-        }
+#[generator]
+#[yields(u32)]
+async fn double(input: impl Stream<Item = u32>) {
+    #[async_for]
+    for i in input {
+        yield i * 2;
     }
 }
 
-fn collect<T: std::fmt::Debug>(input: impl Stream<Item = T>) -> impl Future<Output = Vec<T>> {
-    stream! {
-        let mut v = vec![];
-        async for i in input {
-            println!("got {:?}", i);
-            v.push(i)
-        }
-        v
+#[generator]
+async fn collect<T: std::fmt::Debug>(input: impl Stream<Item = T>) -> Vec<T> {
+    let mut v = vec![];
+    #[async_for]
+    for i in input {
+        println!("got {:?}", i);
+        v.push(i)
     }
+    v
 }
 
 // // The above functions expands into the following:
 //
-// fn zero_to_three() -> impl Stream<Item = u32> {
+// fn zero_to_three() -> impl ::streams_generator::StreamGenerator<(u32), ()> {
 //     unsafe {
-//         ::streams_generator::new_stream_generator::<_, _, _>(
+//         ::streams_generator::new_stream_generator(
 //             |mut __cx: ::streams_generator::UnsafeContextRef| {
 //                 for i in (0..5).rev() {
 //                     {
@@ -71,9 +71,9 @@ fn collect<T: std::fmt::Debug>(input: impl Stream<Item = T>) -> impl Future<Outp
 //     }
 // }
 //
-// fn double(input: impl Stream<Item = u32>) -> impl Stream<Item = u32> {
+// fn double(input: impl Stream<Item = u32>) -> impl ::streams_generator::StreamGenerator<(u32), ()> {
 //     unsafe {
-//         ::streams_generator::new_stream_generator::<_, _, _>(
+//         ::streams_generator::new_stream_generator(
 //             |mut __cx: ::streams_generator::UnsafeContextRef| {
 //                 let mut stream = input;
 //                 loop {
@@ -103,9 +103,9 @@ fn collect<T: std::fmt::Debug>(input: impl Stream<Item = T>) -> impl Future<Outp
 //     }
 // }
 //
-// fn collect<T: std::fmt::Debug>(input: impl Stream<Item = T>) -> impl Future<Output = Vec<T>> {
+// fn collect<T: std::fmt::Debug>(input: impl Stream<Item = T>) -> impl ::streams_generator::StreamGenerator<(), Vec<T>> {
 //     unsafe {
-//         ::streams_generator::new_stream_generator::<(), _, _>(
+//         ::streams_generator::new_stream_generator(
 //             |mut __cx: ::streams_generator::UnsafeContextRef| {
 //                 let mut v = ::alloc::vec::Vec::new();
 //                 {
