@@ -7,13 +7,13 @@ streams using a much easier syntax, much akin to how async/await futures work to
 
 ```rust
 #![feature(generators)] // required nightly feature
-use streams_generator::stream;
+use streams_generator::async_generator;
 use std::future::Future; // Futures provided by std
 use futures_core::Stream; // Streams provided by futures
 
 /// Creating brand new streams
 fn zero_to_three() -> impl Stream<Item = u32> {
-    stream! {
+    async_generator! {
         for i in (0..5).rev() {
             // futures can be awaited in these streams
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -25,7 +25,7 @@ fn zero_to_three() -> impl Stream<Item = u32> {
 
 /// Consuming streams to create new streams (akin to input.map())
 fn double(input: impl Stream<Item = u32>) -> impl Stream<Item = u32> {
-    stream! {
+    async_generator! {
         // custom async for syntax handles the polling of the stream automatically for you
         async for i in input {
             yield i * 2;
@@ -35,7 +35,7 @@ fn double(input: impl Stream<Item = u32>) -> impl Stream<Item = u32> {
 
 /// Futures are also supported
 fn collect<T: std::fmt::Debug>(input: impl Stream<Item = T>) -> impl Future<Output = Vec<T>> {
-    stream! {
+    async_generator! {
         let mut v = vec![];
         async for i in input {
             println!("got {:?}", i);
@@ -49,7 +49,7 @@ fn collect<T: std::fmt::Debug>(input: impl Stream<Item = T>) -> impl Future<Outp
 
 ## Breakdown
 
-The `stream!` macro works in a very simple way, making a few simple but crucial transformations.
+The `async_generator!` macro works in a very simple way, making a few simple but crucial transformations.
 
 ### Generator
 
@@ -173,7 +173,7 @@ we can use the try `?` syntax to return early from functions.
 
 ```rust
 fn make_requests() -> impl Stream<Item = u32> + Future<Output = Result<(), &'static str>> {
-    stream! {
+    async_generator! {
         for i in 0..5 {
             let resp = async move {
                 // imagine this makes a http request that could fail
@@ -200,21 +200,23 @@ This is also not exclusive to `Result`, any it supports anything that the regula
 
 ## Alternative syntax.
 
-This is not yet supported, but an idea. Instead of having a `stream!` expression level macro,
-we could instead have a `#[stream]` item level macro on a function.
+Instead of having a `async_generator!` expression level macro,
+we can instead use a `#[generator]` attribute macro on a function.
 
 ```rust
 // stream, no return value
-#[stream]
-async fn double(input: impl Stream<Item = u32>) yields i32 {
-    async for i in input {
+#[generator]
+#[yields(i32)]
+async fn double(input: impl Stream<Item = u32>) {
+    #[async_for] for i in input {
         yield i * 2;
     }
 }
 
 // stream with return value
-#[stream]
-async fn make_requests() -> Result<(), &'static str> yields i32 {
+#[generator]
+#[yields(i32)]
+async fn make_requests() -> Result<(), &'static str> {
     for i in 0..5 {
         let resp = async move {
             // imagine this makes a http request that could fail
@@ -227,10 +229,10 @@ async fn make_requests() -> Result<(), &'static str> yields i32 {
 }
 
 // future only
-#[stream]
+#[generator]
 async fn collect(input: impl Stream<Item = i32>) -> Vec<i32> {
     let mut v = vec![];
-    async for i in input {
+    #[async_for] for i in input {
         println!("got {:?}", i);
         v.push(i)
     }
@@ -238,4 +240,8 @@ async fn collect(input: impl Stream<Item = i32>) -> Vec<i32> {
 }
 ```
 
-This is similar syntax to that proposed by [estebank](https://hackmd.io/9v81TQSgQcaAiqvHQtzN8w#Question-queue).
+This is similar to (and inspired by) a syntax to that was proposed by [estebank](https://hackmd.io/9v81TQSgQcaAiqvHQtzN8w#Question-queue).
+
+It will compile to the same things as just using the expr macro, but might be more semantic. A couple quirks due to the differences of parsing.
+The function code must be valid rust, so you cannot use the `async for` syntax directly from before. A work around is to use `#[async_for]` attribute
+on the for statements. (This requires another nightly feature `#![feature(stmt_expr_attributes)]`)
