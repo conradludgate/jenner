@@ -1,4 +1,4 @@
-use proc_macro2::{Ident, Span};
+use proc_macro2::Ident;
 use quote::format_ident;
 use rand::{distributions::Alphanumeric, Rng};
 use syn::{
@@ -6,116 +6,101 @@ use syn::{
     visit_mut::{
         visit_block_mut, visit_expr_await_mut, visit_expr_mut, visit_expr_yield_mut, VisitMut,
     },
-    Error, Expr, ExprAwait, ExprForLoop, ExprYield, ItemFn, Result, Type,
+    Attribute, Expr, ExprAwait, ExprForLoop, ExprYield, ItemFn, Result, Signature, Stmt, Type,
 };
 
-use crate::{
-    parse::{AsyncGeneratorExprInput, AsyncGeneratorItemInput},
-    tokens::{StreamExprGenerator, StreamItemGenerator},
-};
+use crate::parse::{AttrGenerator, ExprGenerator};
 
-impl AsyncGeneratorExprInput {
-    pub fn process(self) -> Result<StreamExprGenerator> {
-        let Self { mut stmts } = self;
-
-        let random: String = rand::thread_rng()
-            .sample_iter(&Alphanumeric)
-            .take(7)
-            .map(char::from)
-            .collect();
-        let mut visitor = StreamGenVisitor {
-            cx: format_ident!("__cx_{}", random),
-            yields: 0,
-        };
-
-        stmts
-            .iter_mut()
-            .for_each(|stmt| visitor.visit_stmt_mut(stmt));
-
-        let StreamGenVisitor { cx, yields } = visitor;
-
-        let y: Type = if yields == 0 {
-            parse_quote! { () }
-        } else {
-            parse_quote! { _ }
-        };
-
-        Ok(StreamExprGenerator {
-            stream: parse_quote! {
-                unsafe {
-                    ::jenner::new_stream_generator::<#y, _, _>(|mut #cx: ::jenner::UnsafeContextRef| {
-                        #(#stmts)*
-                    })
-                }
-            },
-        })
+impl ExprGenerator {
+    pub fn process(mut self) -> Result<Expr> {
+        let visitor = GenVisitor::new(false);
+        Ok(visitor.into_generator(&mut self.stmts))
     }
 }
 
-impl AsyncGeneratorItemInput {
-    pub fn process(self) -> Result<StreamItemGenerator> {
+impl AttrGenerator {
+    pub fn process(mut self) -> Result<ItemFn> {
         let ItemFn {
-            mut attrs,
-            vis,
-            mut sig,
-            mut block,
-        } = self.func;
+            attrs, sig, block, ..
+        } = &mut self.func;
 
-        if sig.asyncness.take().is_none() {
-            return Err(Error::new(Span::call_site(), "function must be async"));
-        }
+        let return_ty = Self::parse_return_ty(sig);
+        let yield_ty = Self::parse_yield_ty(attrs)?;
 
-        let return_ty = match sig.output {
-            syn::ReturnType::Default => parse_quote! { () },
-            syn::ReturnType::Type(_, t) => t,
+        let sync = sig.asyncness.take().is_none();
+        sig.output = if sync {
+            parse_quote! { -> impl ::jenner::SyncGenerator<#yield_ty, #return_ty> }
+        } else {
+            parse_quote! { -> impl ::jenner::AsyncGenerator<#yield_ty, #return_ty> }
         };
 
+        let mut visitor = GenVisitor::new(sync);
+        visitor.yields = 1; // force yield inference
+        block.stmts = vec![Stmt::Expr(visitor.into_generator(&mut block.stmts))];
+        Ok(self.func)
+    }
+
+    fn parse_return_ty(sig: &Signature) -> Type {
+        match &sig.output {
+            syn::ReturnType::Default => parse_quote! { () },
+            syn::ReturnType::Type(_, t) => (**t).clone(),
+        }
+    }
+
+    fn parse_yield_ty(attrs: &mut Vec<Attribute>) -> Result<Type> {
         let yields = attrs
             .drain_filter(|attr| attr.path.get_ident().map_or(false, |i| i == "yields"))
             .next();
-        let yield_ty: Type = match yields {
-            Some(t) => parse2(t.tokens)?,
-            None => parse_quote! { () },
-        };
+        match yields {
+            Some(t) => parse2(t.tokens),
+            None => Ok(parse_quote! { () }),
+        }
+    }
+}
 
-        sig.output =
-            parse_quote! { -> impl ::jenner::StreamGenerator<#yield_ty, #return_ty> };
+struct GenVisitor {
+    pub cx: Ident,
+    pub yields: usize,
+    pub sync: bool,
+}
 
+impl GenVisitor {
+    pub fn new(sync: bool) -> Self {
         let random: String = rand::thread_rng()
             .sample_iter(&Alphanumeric)
             .take(7)
             .map(char::from)
             .collect();
-        let mut visitor = StreamGenVisitor {
+        GenVisitor {
             cx: format_ident!("__cx_{}", random),
             yields: 0,
-        };
+            sync,
+        }
+    }
 
-        block
-            .stmts
-            .iter_mut()
-            .for_each(|stmt| visitor.visit_stmt_mut(stmt));
+    fn into_generator(mut self, stmts: &mut [Stmt]) -> Expr {
+        if !self.sync {
+            stmts.iter_mut().for_each(|stmt| self.visit_stmt_mut(stmt));
+        }
 
-        let StreamGenVisitor { cx, .. } = visitor;
+        let Self { cx, yields, sync } = self;
+        let y: Type = (yields == 0)
+            .then(|| parse_quote! { () })
+            .unwrap_or_else(|| parse_quote! { _ });
 
-        Ok(StreamItemGenerator {
-            stream: parse_quote! {
-                #(#attrs)* #vis #sig {
-                    unsafe {
-                        ::jenner::new_stream_generator(|mut #cx: ::jenner::UnsafeContextRef| #block)
-                    }
-                }
-            },
-        })
+        if sync {
+            parse_quote! {
+                unsafe { ::jenner::new_sync_generator::<#y, _, _>(|| { #(#stmts)* }) }
+            }
+        } else {
+            parse_quote! {
+                unsafe { ::jenner::new_async_generator::<#y, _, _>(|mut #cx: ::jenner::UnsafeContextRef| { #(#stmts)* }) }
+            }
+        }
     }
 }
 
-struct StreamGenVisitor {
-    pub cx: Ident,
-    pub yields: usize,
-}
-
-impl VisitMut for StreamGenVisitor {
+impl VisitMut for GenVisitor {
     fn visit_expr_mut(&mut self, i: &mut syn::Expr) {
         match i {
             Expr::Await(await_) => {

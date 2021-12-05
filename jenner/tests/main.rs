@@ -1,11 +1,11 @@
 #![feature(generators)]
 #![feature(stmt_expr_attributes)]
 
-use std::time::Duration;
 use jenner::{exports::Stream, generator};
+use std::time::Duration;
 
 #[tokio::test]
-async fn main() {
+async fn streams() {
     let v = collect(double(countdown())).await;
     assert_eq!(v, vec![8, 6, 4, 2, 0]);
 }
@@ -37,4 +37,23 @@ async fn collect<T: std::fmt::Debug>(input: impl Stream<Item = T>) -> Vec<T> {
         v.push(i)
     }
     v
+}
+
+#[test]
+fn iterators() {
+    let v: Vec<_> = fibonacii().take(10).collect();
+    assert_eq!(v, vec![0, 1, 1, 2, 3, 5, 8, 13, 21, 34]);
+}
+
+#[generator]
+#[yields(usize)]
+fn fibonacii() {
+    let mut a = 0;
+    let mut b = 1;
+    loop {
+        let tmp = a;
+        a = b;
+        b += tmp;
+        yield tmp;
+    }
 }

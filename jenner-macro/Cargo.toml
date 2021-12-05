@@ -15,5 +15,5 @@ proc-macro = true
 [dependencies]
 proc-macro2 = "1.0"
 quote = "1.0"
-syn = { version = "1.0", default-features = false, features = ["full", "parsing", "visit-mut", "printing"] }
+syn = { version = "1.0", default-features = false, features = ["full", "parsing", "visit-mut", "printing", "clone-impls"] }
 rand = "0.8.4"

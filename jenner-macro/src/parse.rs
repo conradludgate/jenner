@@ -2,14 +2,26 @@ use proc_macro2::{Group, TokenStream, TokenTree};
 use quote::{format_ident, quote_spanned};
 use syn::{parse::Parse, Block, ItemFn, Result, Stmt};
 
-pub struct AsyncGeneratorExprInput {
+pub struct ExprGenerator {
     pub stmts: Vec<Stmt>,
 }
 
-impl Parse for AsyncGeneratorExprInput {
+impl Parse for ExprGenerator {
     fn parse(input: syn::parse::ParseStream) -> Result<Self> {
-        Ok(AsyncGeneratorExprInput {
+        Ok(ExprGenerator {
             stmts: Block::parse_within(input)?,
+        })
+    }
+}
+
+pub struct AttrGenerator {
+    pub func: ItemFn,
+}
+
+impl Parse for AttrGenerator {
+    fn parse(input: syn::parse::ParseStream) -> Result<Self> {
+        Ok(AttrGenerator {
+            func: input.parse()?,
         })
     }
 }
@@ -36,16 +48,4 @@ pub fn replace_async_for(input: impl IntoIterator<Item = TokenTree>) -> TokenStr
     }
 
     tokens.into_iter().collect()
-}
-
-pub struct AsyncGeneratorItemInput {
-    pub func: ItemFn,
-}
-
-impl Parse for AsyncGeneratorItemInput {
-    fn parse(input: syn::parse::ParseStream) -> Result<Self> {
-        Ok(AsyncGeneratorItemInput {
-            func: input.parse()?,
-        })
-    }
 }
