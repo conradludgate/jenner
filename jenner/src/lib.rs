@@ -5,7 +5,7 @@
 //!
 //! ```rust
 //! // a couple required nightly features
-//! #![feature(generators, stmt_expr_attributes)]
+//! #![feature(generators, generator_trait, never_type)]
 //!
 //! use jenner::generator;
 //! use futures_core::Stream;
@@ -79,7 +79,7 @@
 //! }
 //! ```
 
-#![feature(generator_trait)]
+#![feature(generator_trait, never_type)]
 
 use futures_core::{Future, Stream};
 
@@ -87,7 +87,7 @@ use futures_core::{Future, Stream};
 /// both `Future<Output = R>` and `Stream<Item = Y>`.
 ///
 /// ```
-/// #![feature(generators)]
+/// #![feature(generators, generator_trait, never_type)]
 ///
 /// use jenner::async_generator;
 /// use futures_core::Stream;
@@ -142,7 +142,7 @@ pub use jenner_macro::async_generator;
 ///
 /// ```
 /// // a couple required nightly features
-/// #![feature(generators, stmt_expr_attributes)]
+/// #![feature(generators, generator_trait, never_type)]
 ///
 /// use jenner::generator;
 /// use futures_core::Stream;
@@ -229,7 +229,7 @@ use std::{
 #[doc(hidden)]
 pub mod __private {
     pub use futures_core::{Future, Stream};
-    pub use std::{pin, task};
+    pub use std::{ops::GeneratorState, pin, task};
 }
 
 #[doc(hidden)]
@@ -251,25 +251,28 @@ impl<'a> From<&mut Context<'a>> for UnsafeContextRef {
 unsafe impl Send for UnsafeContextRef {}
 
 #[pin_project]
-struct GeneratorImpl<G> {
+#[doc(hidden)]
+pub struct GeneratorImpl<G> {
     #[pin]
     generator: G,
 }
 
-#[doc(hidden)]
-pub unsafe fn new_async_generator<Y, R, G>(generator: G) -> impl AsyncGenerator<Y, R>
-where
-    G: Generator<UnsafeContextRef, Yield = Poll<Y>, Return = R>,
-{
-    GeneratorImpl { generator }
-}
+impl<G> GeneratorImpl<G> {
+    #[doc(hidden)]
+    pub unsafe fn new_async<Y, R>(generator: G) -> Self
+    where
+        G: Generator<UnsafeContextRef, Yield = Poll<Y>, Return = R>,
+    {
+        Self { generator }
+    }
 
-#[doc(hidden)]
-pub unsafe fn new_sync_generator<Y, R, G>(generator: G) -> impl SyncGenerator<Y, R>
-where
-    G: Generator<(), Yield = Y, Return = R>,
-{
-    GeneratorImpl { generator }
+    #[doc(hidden)]
+    pub unsafe fn new_sync<Y, R>(generator: G) -> Self
+    where
+        G: Generator<(), Yield = Y, Return = R>,
+    {
+        Self { generator }
+    }
 }
 
 impl<Y, G> Stream for GeneratorImpl<G>
@@ -326,6 +329,14 @@ pub trait AsyncGenerator<Y, R>: Stream<Item = Y> + Future<Output = R> {
     ///     `yield item;` => returns `Poll::Ready(GeneratorState::Yielded(item))`,
     ///     `return item;` => returns `Poll::Ready(GeneratorState::Completed(item))`,
     fn poll_resume(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<GeneratorState<Y, R>>;
+
+    #[doc(hidden)]
+    fn into_async_generator(self) -> Self
+    where
+        Self: Sized,
+    {
+        self
+    }
 }
 
 /// This trait is a combination of [`Iterator`], [`Finally`] and [`Generator`] all in one neat package.
@@ -385,5 +396,103 @@ where
 {
     fn resume(self: Pin<&mut Self>) -> GeneratorState<Y, R> {
         self.project().generator.resume(())
+    }
+}
+
+#[doc(hidden)]
+pub trait IntoAsyncGenerator {
+    type Yield;
+    type Return;
+    type AsyncGenerator: AsyncGenerator<Self::Yield, Self::Return>;
+    fn into_async_generator(self) -> Self::AsyncGenerator;
+}
+
+impl<S> IntoAsyncGenerator for S
+where
+    S: Stream,
+{
+    type Yield = S::Item;
+    type Return = ();
+    type AsyncGenerator = StreamGenerator<Self>;
+
+    fn into_async_generator(self) -> Self::AsyncGenerator {
+        StreamGenerator { stream: self }
+    }
+}
+
+#[doc(hidden)]
+#[pin_project]
+pub struct StreamGenerator<S> {
+    #[pin]
+    stream: S,
+}
+
+impl<S> Stream for StreamGenerator<S>
+where
+    S: Stream,
+{
+    type Item = S::Item;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.project().stream.poll_next(cx)
+    }
+}
+
+impl<S> Future for StreamGenerator<S>
+where
+    S: Stream,
+{
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match self.project().stream.poll_next(cx) {
+            Poll::Pending | Poll::Ready(Some(_)) => Poll::Pending,
+            Poll::Ready(None) => Poll::Ready(()),
+        }
+    }
+}
+
+impl<S> AsyncGenerator<S::Item, ()> for StreamGenerator<S>
+where
+    S: Stream,
+{
+    fn poll_resume(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<GeneratorState<S::Item, ()>> {
+        match self.project().stream.poll_next(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(Some(r)) => Poll::Ready(GeneratorState::Yielded(r)),
+            Poll::Ready(None) => Poll::Ready(GeneratorState::Complete(())),
+        }
+    }
+}
+
+/// Type returned by `.await`ed for loops
+pub enum ForResult<B, F> {
+    /// Value `break`ed from the for loop
+    Break(B),
+    /// If the for loop has a `Finally`/`Future` type, the value will be here
+    Finally(F),
+}
+
+impl<B, F> ForResult<B, F> {
+    pub fn into_break(self) -> B
+    where
+        F: Into<!>,
+    {
+        match self {
+            ForResult::Break(b) => b,
+            ForResult::Finally(f) => f.into(),
+        }
+    }
+    pub fn into_finally(self) -> F
+    where
+        B: Into<!>,
+    {
+        match self {
+            ForResult::Break(b) => b.into(),
+            ForResult::Finally(f) => f,
+        }
     }
 }

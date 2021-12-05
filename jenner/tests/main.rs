@@ -1,8 +1,8 @@
-#![feature(generators)]
+#![feature(generators, generator_trait, never_type)]
 #![feature(stmt_expr_attributes)]
 
 use futures_core::Stream;
-use jenner::generator;
+use jenner::{generator, AsyncGenerator};
 use std::time::{Duration, Instant};
 
 #[tokio::test]
@@ -29,7 +29,8 @@ async fn countdown() {
 async fn double(input: impl Stream<Item = u32>) {
     for i in input {
         yield i * 2;
-    }.await;
+    }
+    .await;
 }
 
 #[generator]
@@ -38,7 +39,8 @@ async fn collect<T: std::fmt::Debug>(input: impl Stream<Item = T>) -> Vec<T> {
     for i in input {
         println!("got {:?}", i);
         v.push(i)
-    }.await;
+    }
+    .await;
     v
 }
 
@@ -59,4 +61,34 @@ fn fibonacii() {
         b += tmp;
         yield tmp;
     }
+}
+
+#[tokio::test]
+async fn for_finally() {
+    let start = Instant::now();
+    let v = print(countdown1()).await;
+    assert_eq!(v, "done");
+    // expected to take around a second;
+    assert!(start.elapsed() > Duration::from_millis(200 * 5));
+}
+
+#[generator]
+async fn print(gen: impl AsyncGenerator<u32, &'static str>) -> &'static str {
+    for i in gen {
+        println!("got {:?}", i);
+    }
+    .await
+    .into_finally()
+}
+
+#[generator]
+#[yields(u32)]
+async fn countdown1() -> &'static str {
+    yield 5;
+    for i in (0..5).rev() {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        yield i;
+    }
+
+    "done"
 }

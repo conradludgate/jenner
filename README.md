@@ -27,9 +27,9 @@ fn countdown() -> impl Stream<Item = u32> {
 fn double(input: impl Stream<Item = u32>) -> impl Stream<Item = u32> {
     async_generator! {
         // custom async for syntax handles the polling of the stream automatically for you
-        async for i in input {
+        for i in input {
             yield i * 2;
-        }
+        }.await;
     }
 }
 
@@ -37,10 +37,10 @@ fn double(input: impl Stream<Item = u32>) -> impl Stream<Item = u32> {
 fn collect<T: std::fmt::Debug>(input: impl Stream<Item = T>) -> impl Future<Output = Vec<T>> {
     async_generator! {
         let mut v = vec![];
-        async for i in input {
+        for i in input {
             println!("got {:?}", i);
             v.push(i)
-        }
+        }.await;
         /// Return value of the stream is the output of the future
         v
     }
@@ -127,9 +127,9 @@ Iterating over streams is currently a very poor experience.
 Instead, we provide a simple syntax to iterate the stream asynchronously.
 
 ```rust
-async for i in $stream {
+for i in $stream {
     $body
-}
+}.await;
 ```
 
 becomes
@@ -208,9 +208,9 @@ we can instead use a `#[generator]` attribute macro on a function.
 #[generator]
 #[yields(i32)]
 async fn double(input: impl Stream<Item = u32>) {
-    #[async_for] for i in input {
+    for i in input {
         yield i * 2;
-    }
+    }.await;
 }
 
 // stream with return value
@@ -232,16 +232,14 @@ async fn make_requests() -> Result<(), &'static str> {
 #[generator]
 async fn collect(input: impl Stream<Item = i32>) -> Vec<i32> {
     let mut v = vec![];
-    #[async_for] for i in input {
+    for i in input {
         println!("got {:?}", i);
         v.push(i)
-    }
+    }.await;
     v
 }
 ```
 
 This is similar to (and inspired by) a syntax to that was proposed by [estebank](https://hackmd.io/9v81TQSgQcaAiqvHQtzN8w#Question-queue).
 
-It will compile to the same things as just using the expr macro, but might be more semantic. A couple quirks due to the differences of parsing.
-The function code must be valid rust, so you cannot use the `async for` syntax directly from before. A work around is to use `#[async_for]` attribute
-on the for statements. (This requires another nightly feature `#![feature(stmt_expr_attributes)]`)
+It will compile to the same things as just using the expr macro, but might be more semantic. 

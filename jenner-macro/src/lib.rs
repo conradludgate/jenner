@@ -6,6 +6,8 @@ use proc_macro2::TokenStream;
 use quote::ToTokens;
 use syn::parse2;
 
+mod break_visit;
+mod gen_visit;
 mod parse;
 mod process;
 
