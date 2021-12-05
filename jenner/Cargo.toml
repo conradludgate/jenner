@@ -12,3 +12,6 @@ repository = "https://github.com/conradludgate/jenner"
 jenner-macro = { version = "=0.1.0", path = "../jenner-macro" }
 futures-core = "0.3"
 pin-project = "1"
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["full"] }
