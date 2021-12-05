@@ -3,9 +3,7 @@ use quote::format_ident;
 use rand::{distributions::Alphanumeric, Rng};
 use syn::{
     parse2, parse_quote,
-    visit_mut::{
-        visit_block_mut, visit_expr_await_mut, visit_expr_mut, visit_expr_yield_mut, VisitMut,
-    },
+    visit_mut::{visit_expr_mut, visit_expr_yield_mut, VisitMut},
     Attribute, Expr, ExprAwait, ExprForLoop, ExprYield, ItemFn, Result, Signature, Stmt, Type,
 };
 
@@ -103,8 +101,14 @@ impl VisitMut for GenVisitor {
     fn visit_expr_mut(&mut self, i: &mut syn::Expr) {
         match i {
             Expr::Await(await_) => {
-                visit_expr_await_mut(self, await_);
+                self.visit_expr_await_mut(await_);
                 let ExprAwait { attrs, base, .. } = await_;
+
+                if self.handle_for_await(&mut *base) {
+                    *i = parse_quote! { #(#attrs)* { #base } };
+                    return;
+                }
+
                 let cx = &self.cx;
                 *i = parse_quote! {{
                     let mut fut = #(#attrs)* { #base };
@@ -125,57 +129,6 @@ impl VisitMut for GenVisitor {
                     }
                 }}
             }
-            Expr::ForLoop(for_loop) => {
-                let async_attrs = for_loop
-                    .attrs
-                    .drain_filter(|attr| attr.path.get_ident().map_or(false, |i| i == "async_for"))
-                    .count();
-
-                if async_attrs > 0 {
-                    let ExprForLoop {
-                        attrs,
-                        label,
-                        pat,
-                        expr,
-                        body,
-                        ..
-                    } = for_loop;
-
-                    visit_expr_mut(self, expr);
-                    visit_block_mut(self, body);
-
-                    let cx = &self.cx;
-                    *i = parse_quote! {
-                        #(#attrs)*
-                        {
-                            let mut stream = #expr;
-                            #label loop {
-                                let next = loop {
-                                    let polled = unsafe {
-                                        ::jenner::__private::Stream::poll_next(
-                                            ::jenner::__private::pin::Pin::new_unchecked(&mut stream),
-                                            #cx.get_context()
-                                        )
-                                    };
-                                    match polled {
-                                        ::jenner::__private::task::Poll::Ready(r) => break r,
-                                        ::jenner::__private::task::Poll::Pending => {
-                                            yield ::jenner::__private::task::Poll::Pending;
-                                        }
-                                    }
-                                };
-
-                                match next {
-                                    Some(#pat) => #body,
-                                    _ => break,
-                                };
-                            }
-                        }
-                    }
-                } else {
-                    visit_expr_mut(self, i);
-                }
-            }
             i => visit_expr_mut(self, i),
         }
     }
@@ -189,5 +142,52 @@ impl VisitMut for GenVisitor {
         *expr = parse_quote! {
             ::jenner::__private::task::Poll::Ready( #(#attrs)* { #expr } )
         };
+    }
+}
+
+impl GenVisitor {
+    fn handle_for_await(&mut self, i: &mut Expr) -> bool {
+        if let Expr::ForLoop(for_loop) = i {
+            let ExprForLoop {
+                attrs,
+                label,
+                pat,
+                expr,
+                body,
+                ..
+            } = for_loop;
+
+            let cx = &self.cx;
+            *i = parse_quote! {
+                #(#attrs)*
+                {
+                    let mut stream = #expr;
+                    #label loop {
+                        let next = loop {
+                            let polled = unsafe {
+                                ::jenner::__private::Stream::poll_next(
+                                    ::jenner::__private::pin::Pin::new_unchecked(&mut stream),
+                                    #cx.get_context()
+                                )
+                            };
+                            match polled {
+                                ::jenner::__private::task::Poll::Ready(r) => break r,
+                                ::jenner::__private::task::Poll::Pending => {
+                                    yield ::jenner::__private::task::Poll::Pending;
+                                }
+                            }
+                        };
+
+                        match next {
+                            Some(#pat) => #body,
+                            _ => break,
+                        };
+                    }
+                }
+            };
+            true
+        } else {
+            false
+        }
     }
 }

@@ -29,13 +29,10 @@
 //! async fn collect(input: impl Stream<Item = u32>) -> Vec<u32> {
 //!     let mut v = vec![];
 //!
-//!     // special syntax to consume a stream while still
-//!     // preserving safety and control flow
-//!     #[async_for]
 //!     for i in input {
 //!         println!("{:?}", i);
 //!         v.push(i)
-//!     }
+//!     }.await; // special syntax to consume a stream
 //!
 //!     v
 //! }
@@ -115,12 +112,10 @@ use futures_core::{Future, Stream};
 ///     async_generator!{
 ///         let mut v = vec![];
 ///
-///         // special syntax to consume a stream while still
-///         // preserving safety and control flow
-///         async for i in input {
+///         for i in input {
 ///             println!("{:?}", i);
 ///             v.push(i)
-///         }
+///         }.await; // special syntax to consume a stream
 ///
 ///         v
 ///     }
@@ -171,13 +166,10 @@ pub use jenner_macro::async_generator;
 /// async fn collect(input: impl Stream<Item = u32>) -> Vec<u32> {
 ///     let mut v = vec![];
 ///
-///     // special syntax to consume a stream while still
-///     // preserving safety and control flow
-///     #[async_for]
 ///     for i in input {
 ///         println!("{:?}", i);
 ///         v.push(i)
-///     }
+///     }.await; // special syntax to consume a stream
 ///
 ///     v
 /// }

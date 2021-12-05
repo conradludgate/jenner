@@ -27,20 +27,18 @@ async fn countdown() {
 #[generator]
 #[yields(u32)]
 async fn double(input: impl Stream<Item = u32>) {
-    #[async_for]
     for i in input {
         yield i * 2;
-    }
+    }.await;
 }
 
 #[generator]
 async fn collect<T: std::fmt::Debug>(input: impl Stream<Item = T>) -> Vec<T> {
     let mut v = vec![];
-    #[async_for]
     for i in input {
         println!("got {:?}", i);
         v.push(i)
-    }
+    }.await;
     v
 }
 
