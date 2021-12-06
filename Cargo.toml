@@ -1,5 +1,6 @@
 [workspace]
 members = [
     "jenner",
-    "jenner-macro"
+    "jenner-macro",
+    "jenner-parser",
 ]
