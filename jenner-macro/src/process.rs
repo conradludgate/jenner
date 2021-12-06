@@ -20,6 +20,12 @@ impl AttrGenerator {
         let return_ty = Self::parse_return_ty(sig);
         let yield_ty = Self::parse_yield_ty(attrs)?;
 
+        // unwrap yield type.
+        let yield_ty = match yield_ty {
+            Type::Paren(t) => *t.elem,
+            y => y,
+        };
+
         let sync = sig.asyncness.take().is_none();
         sig.output = if sync {
             parse_quote! { -> impl ::jenner::SyncGenerator<#yield_ty, #return_ty> }
