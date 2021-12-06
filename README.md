@@ -6,66 +6,73 @@ streams using a much easier syntax, much akin to how async/await futures work to
 ## Example
 
 ```rust
-#![feature(generators)] // required nightly feature
-use jenner::async_generator;
-use std::future::Future; // Futures provided by std
-use futures_core::Stream; // Streams provided by futures
+#![feature(generators, generator_trait, never_type)] // required nightly feature
+use jenner::generator;
+use futures_core::{Future, Stream}; // Streams provided by futures
 
 /// Creating brand new streams
-fn countdown() -> impl Stream<Item = u32> {
-    async_generator! {
-        for i in (0..5).rev() {
-            // futures can be awaited in these streams
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            // yielding values corresponds to the stream item
-            yield i;
-        }
+#[generator]
+#[yields(u32)]
+async fn countdown() {
+    yield 5;
+    for i in (0..5).rev() {
+        // futures can be awaited in these streams
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        // yielding values corresponds to the stream item
+        yield i;
     }
 }
 
 /// Consuming streams to create new streams (akin to input.map())
-fn double(input: impl Stream<Item = u32>) -> impl Stream<Item = u32> {
-    async_generator! {
-        // custom async for syntax handles the polling of the stream automatically for you
-        for i in input {
-            yield i * 2;
-        }.await;
-    }
+#[generator]
+#[yields(u32)]
+async fn double(input: impl Stream<Item = u32>) {
+    // custom async for syntax handles the polling of the stream automatically for you
+    for i in input {
+        yield i * 2;
+    }.await;
 }
 
 /// Futures are also supported
-fn collect<T: std::fmt::Debug>(input: impl Stream<Item = T>) -> impl Future<Output = Vec<T>> {
-    async_generator! {
-        let mut v = vec![];
-        for i in input {
-            println!("got {:?}", i);
-            v.push(i)
-        }.await;
-        /// Return value of the stream is the output of the future
-        v
-    }
+#[generator]
+async fn collect<T: std::fmt::Debug>(input: impl Stream<Item = T>) -> Vec<T> {
+    let mut v = vec![];
+    for i in input {
+        println!("{:?}", i);
+        v.push(i)
+    }.await;
+    /// Return value of the stream is the output of the future
+    v
 }
 ```
 
 ## Breakdown
 
-The `async_generator!` macro works in a very simple way, making a few simple but crucial transformations.
+The `generator` attribute macro works in a very simple way, making a few simple but crucial transformations.
 
 ### Generator
 
-Firstly, the entire block body is wrapped in this expression
+Firstly, the function signature is re-written to
+
+```rust
+fn countdown() -> impl ::jenner::AsyncGenerator<u32, ()>;
+fn double(input: impl Stream<Item = u32>) -> impl ::jenner::AsyncGenerator<u32, ()>;
+fn collect(input: impl Stream<Item = u32>) -> impl ::jenner::AsyncGenerator<!, Vec<u32>>; // never yields
+```
+
+Then, the function body is wrapped in this expression
 
 ```rust
 unsafe {
-    ::jenner::new_stream_generator(|mut __cx: ::jenner::UnsafeContextRef|{
+    ::jenner::GeneratorImpl::new_async(|mut __cx: ::jenner::UnsafeContextRef|{
         $body
     })
 }
 ```
 
-The `new_stream_generator` function is fairly simple.
-It accepts a `Generator<Yield = Poll<Y>, Return = R>` and returns an `AsyncStream` type,
-which implements `StreamGenerator<Y, R>` (and by extension, `Stream<Item = Y>` and `Future<Output = R>`).
+The `new_async` function is fairly simple.
+It accepts a `Generator<Yield = Poll<Y>, Return = R>` and returns an `AsyncGenerator<Y, R>` type,
+which implements both `Stream<Item = Y>` and `Future<Output = R>`.
 
 ### Yields
 
@@ -121,36 +128,51 @@ that loops are an expression. This allows us to assign the value from the future
 
 This is pretty close to how `await` works in regular rust's `async` blocks.
 
-### Async For
+### For Await
 
 Iterating over streams is currently a very poor experience.
-Instead, we provide a simple syntax to iterate the stream asynchronously.
+Instead, we provide a simple syntax to iterate any generator asynchronously.
 
 ```rust
-for i in $stream {
+let output = for i in $stream {
     $body
 }.await;
 ```
 
-becomes
+One thing of note, the for loop now returns a value. This is not like standard for loops, but is similar to the `loop` keyword.
+The idea here is that generators both have their iterator part, as well as a final output. We may want to capture that.
+
+However, we cannot rely on the loop completing every time, the user could have their own conditional break statement. We deal
+with this by returning a `jenner::ForResult<Break, Finally>` enum type, not too different from `Result`.
+
+You can use `result.finished()` to turn a `ForResult<Break, Finally>` into `Result<Finally, Break>`. There's also a helper function
+`fn into_finally(self) -> Finally` if there are no `break`s inside of the loop.
+
+When processed, the code turns into
 
 ```rust
 {
-    let mut stream = $stream
-    loop {
+    let gen = #stream; // evaluate the stream
+    let mut gen = {
+        // weak form of specialisation.
+        use ::jenner::{__private::IntoAsyncGenerator, AsyncGenerator};
+        gen.into_async_generator()
+    };
+    let res: ::jenner::ForResult<_, _> = loop {
         let next = loop {
             let pinned = unsafe { Pin::new_unchecked(&mut fut) };
-            let polled = Stream::poll_next(pinned, __cx.get_context());
+            let polled = Stream::poll_resume(pinned, __cx.get_context());
             match polled {
                 Poll::Ready(r) => break r,
                 Poll::Pending => yield Poll::Pending,
             }
         };
         match next {
-            Some(i) => $body,
-            _ => break,
+            GeneratorState::Yielded(i) => #body,
+            GeneratorState::Complete(c) => break ForResult::Finally(c),
         }
-    }
+    };
+    res
 }
 ```
 
@@ -172,23 +194,23 @@ Since these generators are also functions that can return value,
 we can use the try `?` syntax to return early from functions.
 
 ```rust
-fn make_requests() -> impl Stream<Item = u32> + Future<Output = Result<(), &'static str>> {
-    async_generator! {
-        for i in 0..5 {
-            let resp = async move {
-                // imagine this makes a http request that could fail
-                let req = if i == 4 { Err("4 is a random number") } else { Ok(i) };
-                req
-            }.await;
+#[generator]
+#[yields(u32)]
+fn make_requests() -> Result<(), &'static str> {
+    for i in 0..5 {
+        let resp = async move {
+            // imagine this makes a http request that could fail
+            let req = if i == 4 { Err("4 is a random number") } else { Ok(i) };
+            req
+        }.await;
 
-            // Using the `?` syntax to return early with the error
-            // but continue with any good values. (can be used anywhere and not exclusively with yields)
-            yield resp?;
-        }
-
-        // we don't care about the return value, but rust needs one anyway
-        Ok(())
+        // Using the `?` syntax to return early with the error
+        // but continue with any good values. (can be used anywhere and not exclusively with yields)
+        yield resp?;
     }
+
+    // we don't care about the return value, but rust needs one anyway
+    Ok(())
 }
 ```
 
@@ -197,49 +219,3 @@ In this case, that's performed by ensuring the return value is both `Stream + Fu
 output of the future to be a result.
 
 This is also not exclusive to `Result`, any it supports anything that the regular `try` syntax supports.
-
-## Alternative syntax.
-
-Instead of having a `async_generator!` expression level macro,
-we can instead use a `#[generator]` attribute macro on a function.
-
-```rust
-// stream, no return value
-#[generator]
-#[yields(i32)]
-async fn double(input: impl Stream<Item = u32>) {
-    for i in input {
-        yield i * 2;
-    }.await;
-}
-
-// stream with return value
-#[generator]
-#[yields(i32)]
-async fn make_requests() -> Result<(), &'static str> {
-    for i in 0..5 {
-        let resp = async move {
-            // imagine this makes a http request that could fail
-            let req = if i == 4 { Err("4 is a random number") } else { Ok(i) };
-            req
-        }.await;
-        yield resp?;
-    }
-    Ok(())
-}
-
-// future only
-#[generator]
-async fn collect(input: impl Stream<Item = i32>) -> Vec<i32> {
-    let mut v = vec![];
-    for i in input {
-        println!("got {:?}", i);
-        v.push(i)
-    }.await;
-    v
-}
-```
-
-This is similar to (and inspired by) a syntax to that was proposed by [estebank](https://hackmd.io/9v81TQSgQcaAiqvHQtzN8w#Question-queue).
-
-It will compile to the same things as just using the expr macro, but might be more semantic.

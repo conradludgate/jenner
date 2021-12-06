@@ -1,5 +1,5 @@
 //! A set of traits and proc-macros involved in making and using generators
-//! to create [`Stream`]s, [`Future`]s and [`Iterator`]s
+//! to create [`Stream`](futures_core::Stream)s, [`Future`](futures_core::Future)s and [`Iterator`]s
 //!
 //! # Asynchronous example
 //!
@@ -80,8 +80,8 @@
 //! ```
 #![feature(generator_trait, never_type, unwrap_infallible)]
 
-/// From the provided generator body, it creates an `impl [AsyncGenerator]<Y, R>` type that implements
-/// both `Future<Output = R>` and `Stream<Item = Y>`.
+/// From the provided generator body, it creates an [`impl AsyncGenerator<Y, R>`](AsyncGenerator) type that implements
+/// both [`Future<Output = R>`](futures_core::Future) and [`Stream<Item = Y>`](futures_core::Stream).
 ///
 /// ```
 /// #![feature(generators, generator_trait, never_type)]
@@ -220,6 +220,7 @@ mod sync;
 
 pub use asynch::AsyncGenerator;
 pub use sync::SyncGenerator;
+pub use sync::Finally;
 
 #[doc(hidden)]
 pub mod __private {
