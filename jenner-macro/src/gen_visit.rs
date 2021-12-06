@@ -45,7 +45,7 @@ impl GenVisitor {
             }
         } else {
             parse_quote! {
-                unsafe { ::jenner::GeneratorImpl::new_async::<#y, _>(|mut #cx: ::jenner::UnsafeContextRef| { #(#stmts)* }) }
+                unsafe { ::jenner::GeneratorImpl::new_async::<#y, _>(|mut #cx: ::jenner::__private::UnsafeContextRef| { #(#stmts)* }) }
             }
         }
     }
@@ -132,7 +132,7 @@ impl GenVisitor {
                     let gen = #expr;
                     let mut gen = {
                         // weak form of specialisation.
-                        use ::jenner::{IntoAsyncGenerator, AsyncGenerator};
+                        use ::jenner::{__private::IntoAsyncGenerator, AsyncGenerator};
                         gen.into_async_generator()
                     };
                     let res: ::jenner::ForResult<#break_ty, _> = #label loop {

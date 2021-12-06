@@ -242,4 +242,4 @@ async fn collect(input: impl Stream<Item = i32>) -> Vec<i32> {
 
 This is similar to (and inspired by) a syntax to that was proposed by [estebank](https://hackmd.io/9v81TQSgQcaAiqvHQtzN8w#Question-queue).
 
-It will compile to the same things as just using the expr macro, but might be more semantic. 
+It will compile to the same things as just using the expr macro, but might be more semantic.
