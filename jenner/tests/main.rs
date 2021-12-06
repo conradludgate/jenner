@@ -18,6 +18,7 @@ async fn streams() {
 #[yields(u32)]
 async fn countdown() {
     yield 5;
+
     for i in (0..5).rev() {
         tokio::time::sleep(Duration::from_millis(200)).await;
         yield i;
@@ -64,7 +65,7 @@ fn fibonacii() {
 }
 
 #[tokio::test]
-async fn for_finally() {
+async fn complete() {
     let start = Instant::now();
     let v = print(countdown1()).await;
     assert_eq!(v, "done");
@@ -78,7 +79,7 @@ async fn print(gen: impl AsyncGenerator<u32, &'static str>) -> &'static str {
         println!("got {:?}", i);
     }
     .await
-    .into_finally()
+    .complete() // can be called since the loop has no breaks
 }
 
 #[generator]

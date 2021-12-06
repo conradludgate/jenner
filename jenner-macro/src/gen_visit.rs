@@ -54,14 +54,15 @@ impl GenVisitor {
 impl VisitMut for GenVisitor {
     fn visit_expr_mut(&mut self, i: &mut syn::Expr) {
         match i {
-            Expr::Await(await_) => {
-                self.visit_expr_await_mut(await_);
+            Expr::Await(await_) if !self.sync => {
                 let ExprAwait { attrs, base, .. } = await_;
 
                 if self.handle_for_await(&mut *base) {
                     *i = parse_quote! { #(#attrs)* { #base } };
                     return;
                 }
+
+                self.visit_expr_mut(&mut *base);
 
                 let cx = &self.cx;
                 *i = parse_quote! {{
@@ -82,6 +83,53 @@ impl VisitMut for GenVisitor {
                         }
                     }
                 }}
+            }
+            Expr::ForLoop(for_loop) => {
+                self.visit_expr_for_loop_mut(for_loop);
+
+                let ExprForLoop {
+                    attrs,
+                    label,
+                    pat,
+                    expr,
+                    body,
+                    ..
+                } = for_loop;
+
+                let mut vis = BreakVisitor {
+                    label: &*label,
+                    outside: false,
+                    breaks: 0,
+                };
+                vis.visit_block_mut(body);
+                let BreakVisitor { breaks, .. } = vis;
+
+                let break_ty: Type = if breaks == 0 {
+                    parse_quote! { ! }
+                } else {
+                    parse_quote! { _ }
+                };
+
+                *i = parse_quote! {
+                    #(#attrs)*
+                    {
+                        let __gen = #expr;
+                        let mut __gen = {
+                            // weak form of specialisation.
+                            use ::jenner::{__private::IntoSyncGenerator, SyncGenerator};
+                            __gen.into_sync_generator()
+                        };
+                        let res: ::jenner::ForResult<#break_ty, _> = #label loop {
+                            let __pinned = unsafe { ::jenner::__private::pin::Pin::new_unchecked(&mut __gen) };
+                            let __state = ::jenner::SyncGenerator::resume(__pinned);
+                            match __state {
+                                ::jenner::__private::GeneratorState::Yielded(#pat) => #body,
+                                ::jenner::__private::GeneratorState::Complete(c) => break ::jenner::ForResult::Complete(c),
+                            };
+                        };
+                        res
+                    }
+                };
             }
             i => visit_expr_mut(self, i),
         }
@@ -153,7 +201,7 @@ impl GenVisitor {
 
                         match next {
                             ::jenner::__private::GeneratorState::Yielded(#pat) => #body,
-                            ::jenner::__private::GeneratorState::Complete(c) => break ::jenner::ForResult::Finally(c),
+                            ::jenner::__private::GeneratorState::Complete(c) => break ::jenner::ForResult::Complete(c),
                         };
                     };
                     res

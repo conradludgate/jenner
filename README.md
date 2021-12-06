@@ -143,10 +143,10 @@ One thing of note, the for loop now returns a value. This is not like standard f
 The idea here is that generators both have their iterator part, as well as a final output. We may want to capture that.
 
 However, we cannot rely on the loop completing every time, the user could have their own conditional break statement. We deal
-with this by returning a `jenner::ForResult<Break, Finally>` enum type, not too different from `Result`.
+with this by returning a `jenner::ForResult<Break, Complete>` enum type, not too different from `Result`.
 
-You can use `result.finished()` to turn a `ForResult<Break, Finally>` into `Result<Finally, Break>`. There's also a helper function
-`fn into_finally(self) -> Finally` if there are no `break`s inside of the loop.
+You can use `result.finished()` to turn a `ForResult<Break, Complete>` into `Result<Complete, Break>`. There's also a helper function
+`fn complete(self) -> Complete` if there are no `break`s inside of the loop.
 
 When processed, the code turns into
 
@@ -169,7 +169,7 @@ When processed, the code turns into
         };
         match next {
             GeneratorState::Yielded(i) => #body,
-            GeneratorState::Complete(c) => break ForResult::Finally(c),
+            GeneratorState::Complete(c) => break ForResult::Complete(c),
         }
     };
     res
