@@ -215,19 +215,19 @@ pub use jenner_macro::async_generator;
 pub use jenner_macro::generator;
 
 mod asynch;
+mod iter;
 mod stream;
 mod sync;
-mod iter;
 
 pub use asynch::AsyncGenerator;
-pub use sync::SyncGenerator;
 pub use sync::Finally;
+pub use sync::SyncGenerator;
 
 #[doc(hidden)]
 pub mod __private {
     pub use crate::asynch::UnsafeContextRef;
-    pub use crate::stream::IntoAsyncGenerator;
     pub use crate::iter::IntoSyncGenerator;
+    pub use crate::stream::IntoAsyncGenerator;
     pub use futures_core::{Future, Stream};
     pub use std::{ops::GeneratorState, pin, task};
 }

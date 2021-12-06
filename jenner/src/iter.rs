@@ -1,7 +1,4 @@
-use std::{
-    ops::GeneratorState,
-    pin::Pin,
-};
+use std::{ops::GeneratorState, pin::Pin};
 
 use pin_project::pin_project;
 
