@@ -215,16 +215,18 @@ pub use jenner_macro::async_generator;
 pub use jenner_macro::generator;
 
 mod asynch;
+mod iter;
 mod stream;
 mod sync;
 
 pub use asynch::AsyncGenerator;
-pub use sync::SyncGenerator;
 pub use sync::Finally;
+pub use sync::SyncGenerator;
 
 #[doc(hidden)]
 pub mod __private {
     pub use crate::asynch::UnsafeContextRef;
+    pub use crate::iter::IntoSyncGenerator;
     pub use crate::stream::IntoAsyncGenerator;
     pub use futures_core::{Future, Stream};
     pub use std::{ops::GeneratorState, pin, task};
@@ -242,20 +244,23 @@ pub enum ForResult<B, F> {
     /// Value `break`ed from the for loop
     Break(B),
     /// If the for loop has a `Finally`/`Future` type, the value will be here
-    Finally(F),
+    Complete(F),
 }
 
-impl<B, F> ForResult<B, F> {
-    pub fn into_finally(self) -> F
+impl<B, C> ForResult<B, C> {
+    pub fn complete(self) -> C
     where
         B: Into<!>,
     {
-        self.finished().into_ok()
+        self.is_complete().into_ok()
     }
-    pub fn finished(self) -> Result<F, B> {
+
+    /// Returns [`Ok`] if the for loop completed.
+    /// Otherwise, returns [`Err`] with the value returned by the break
+    pub fn is_complete(self) -> Result<C, B> {
         match self {
             ForResult::Break(b) => Err(b),
-            ForResult::Finally(f) => Ok(f),
+            ForResult::Complete(c) => Ok(c),
         }
     }
 }

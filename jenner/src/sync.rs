@@ -18,6 +18,14 @@ impl<G> GeneratorImpl<G> {
 pub trait SyncGenerator<Y, R>: Iterator<Item = Y> + Finally<Output = R> {
     /// Same as [`Generator::resume`] but with no argument, to match normal iterators
     fn resume(self: Pin<&mut Self>) -> GeneratorState<Y, R>;
+
+    #[doc(hidden)]
+    fn into_sync_generator(self) -> Self
+    where
+        Self: Sized,
+    {
+        self
+    }
 }
 
 /// This allows synchronous generators a way to return a value

@@ -1,10 +1,13 @@
-use std::{pin::Pin, task::{Context, Poll}, ops::GeneratorState};
+use std::{
+    ops::GeneratorState,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
-use futures_core::{Stream, Future};
+use futures_core::{Future, Stream};
 use pin_project::pin_project;
 
 use crate::AsyncGenerator;
-
 
 #[doc(hidden)]
 pub trait IntoAsyncGenerator {

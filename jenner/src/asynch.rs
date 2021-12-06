@@ -1,5 +1,10 @@
-use std::{task::{Context, Poll}, ptr::NonNull, ops::{Generator, GeneratorState}, pin::Pin};
-use futures_core::{Stream, Future};
+use futures_core::{Future, Stream};
+use std::{
+    ops::{Generator, GeneratorState},
+    pin::Pin,
+    ptr::NonNull,
+    task::{Context, Poll},
+};
 
 use crate::GeneratorImpl;
 

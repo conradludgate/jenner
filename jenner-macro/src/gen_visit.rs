@@ -3,8 +3,8 @@ use quote::format_ident;
 use rand::{distributions::Alphanumeric, Rng};
 use syn::{
     parse_quote,
-    visit_mut::{visit_expr_mut, visit_expr_yield_mut, VisitMut},
-    Expr, ExprAwait, ExprForLoop, ExprYield, Stmt, Type,
+    visit_mut::{visit_expr_method_call_mut, visit_expr_mut, visit_expr_yield_mut, VisitMut},
+    Expr, ExprAwait, ExprForLoop, ExprMethodCall, ExprYield, Stmt, Type,
 };
 
 use crate::break_visit::BreakVisitor;
@@ -54,10 +54,10 @@ impl GenVisitor {
 impl VisitMut for GenVisitor {
     fn visit_expr_mut(&mut self, i: &mut syn::Expr) {
         match i {
-            Expr::Await(await_) => {
-                self.visit_expr_await_mut(await_);
+            Expr::Await(await_) if !self.sync => {
                 let ExprAwait { attrs, base, .. } = await_;
 
+                self.visit_expr_mut(&mut *base);
                 if self.handle_for_await(&mut *base) {
                     *i = parse_quote! { #(#attrs)* { #base } };
                     return;
@@ -83,6 +83,15 @@ impl VisitMut for GenVisitor {
                     }
                 }}
             }
+            Expr::MethodCall(m) if m.method == "finally" => {
+                visit_expr_method_call_mut(self, m);
+                let ExprMethodCall {
+                    attrs, receiver, ..
+                } = m;
+                if self.handle_for_finally(&mut *receiver) {
+                    *i = parse_quote! { #(#attrs)* { #receiver } };
+                }
+            }
             i => visit_expr_mut(self, i),
         }
     }
@@ -100,7 +109,7 @@ impl VisitMut for GenVisitor {
 }
 
 impl GenVisitor {
-    fn handle_for_await(&mut self, i: &mut Expr) -> bool {
+    fn handle_for_await(&self, i: &mut Expr) -> bool {
         if let Expr::ForLoop(for_loop) = i {
             let ExprForLoop {
                 attrs,
@@ -153,7 +162,57 @@ impl GenVisitor {
 
                         match next {
                             ::jenner::__private::GeneratorState::Yielded(#pat) => #body,
-                            ::jenner::__private::GeneratorState::Complete(c) => break ::jenner::ForResult::Finally(c),
+                            ::jenner::__private::GeneratorState::Complete(c) => break ::jenner::ForResult::Complete(c),
+                        };
+                    };
+                    res
+                }
+            };
+            true
+        } else {
+            false
+        }
+    }
+    fn handle_for_finally(&self, i: &mut Expr) -> bool {
+        if let Expr::ForLoop(for_loop) = i {
+            let ExprForLoop {
+                attrs,
+                label,
+                pat,
+                expr,
+                body,
+                ..
+            } = for_loop;
+
+            let mut vis = BreakVisitor {
+                label: &*label,
+                outside: false,
+                breaks: 0,
+            };
+            vis.visit_block_mut(body);
+            let BreakVisitor { breaks, .. } = vis;
+
+            let break_ty: Type = if breaks == 0 {
+                parse_quote! { ! }
+            } else {
+                parse_quote! { _ }
+            };
+
+            *i = parse_quote! {
+                #(#attrs)*
+                {
+                    let __gen = #expr;
+                    let mut __gen = {
+                        // weak form of specialisation.
+                        use ::jenner::{__private::IntoSyncGenerator, SyncGenerator};
+                        __gen.into_sync_generator()
+                    };
+                    let res: ::jenner::ForResult<#break_ty, _> = #label loop {
+                        let __pinned = unsafe { ::jenner::__private::pin::Pin::new_unchecked(&mut __gen) };
+                        let __state = ::jenner::SyncGenerator::resume(__pinned);
+                        match __state {
+                            ::jenner::__private::GeneratorState::Yielded(#pat) => #body,
+                            ::jenner::__private::GeneratorState::Complete(c) => break ::jenner::ForResult::Complete(c),
                         };
                     };
                     res
