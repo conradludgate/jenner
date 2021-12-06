@@ -36,7 +36,7 @@ impl GenVisitor {
 
         let Self { cx, yields, sync } = self;
         let y: Type = (yields == 0)
-            .then(|| parse_quote! { () })
+            .then(|| parse_quote! { ! })
             .unwrap_or_else(|| parse_quote! { _ });
 
         if sync {

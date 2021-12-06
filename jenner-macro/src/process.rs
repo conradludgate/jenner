@@ -46,7 +46,7 @@ impl AttrGenerator {
             .next();
         match yields {
             Some(t) => parse2(t.tokens),
-            None => Ok(parse_quote! { () }),
+            None => Ok(parse_quote! { ! }),
         }
     }
 }
