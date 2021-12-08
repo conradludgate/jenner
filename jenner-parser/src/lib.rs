@@ -1,6 +1,6 @@
 #![feature(generators, never_type, type_alias_impl_trait)]
 
-use std::marker::PhantomData;
+use std::{marker::PhantomData, pin::Pin};
 
 use jenner::{async_generator, AsyncGenerator};
 use std::io;
@@ -84,48 +84,101 @@ impl<R: AsyncRead + Unpin> BufCursor<R> {
 pub trait Parser<R: AsyncRead + Unpin> {
     type Yields;
     type Output;
-    type Generator: AsyncGenerator<Self::Yields, io::Result<(BufCursor<R>, Self::Output)>>;
 
-    fn parse(&self, cursor: BufCursor<R>) -> Self::Generator;
+    fn parse<'life0, 'gen>(
+        &'life0 self,
+        cursor: BufCursor<R>,
+    ) -> Pin<
+        Box<
+            dyn AsyncGenerator<Self::Yields, io::Result<(BufCursor<R>, Self::Output)>>
+                + Send
+                + 'gen,
+        >,
+    >
+    where
+        'life0: 'gen,
+        Self: 'gen;
+}
+
+pub trait Parser3<R: AsyncRead + Unpin> {
+    type Yields;
+    type Output;
+    #[must_use]
+    #[allow(clippy::type_complexity, clippy::type_repetition_in_bounds)]
+    fn parse<'life0, 'async_trait>(
+        &'life0 self,
+        cursor: BufCursor<R>,
+    ) -> ::core::pin::Pin<
+        Box<
+            dyn ::core::future::Future<Output = (BufCursor<R>, Self::Output)>
+                + ::core::marker::Send
+                + 'async_trait,
+        >,
+    >
+    where
+        'life0: 'async_trait,
+        Self: 'async_trait;
 }
 
 pub struct Tag(pub [u8]);
 
-impl<R: AsyncRead + Unpin> Parser<R> for Tag {
+impl<R: AsyncRead + Unpin + Send + 'static> Parser<R> for Tag {
     type Yields = !;
     type Output = Span;
 
-    type Generator = impl AsyncGenerator<Self::Yields, io::Result<(BufCursor<R>, Self::Output)>>;
-
-    fn parse(&self, mut cursor: BufCursor<R>) -> Self::Generator {
-        // async_generator!{
-        //     let fut = cursor.cur.take_from(&mut cursor.buf, self.0.len());
-        //     let span = fut.await?;
-        //     Ok((cursor, span))
-        // }
-        unsafe {
-            ::jenner::GeneratorImpl::new_async::<!, _>(
-                move |mut __cx_OsN5tXI: ::jenner::__private::UnsafeContextRef| {
-                    let span = {
-                        let mut fut = { cursor.take_from(self.0.len()) };
-                        loop {
-                            let polled = unsafe {
-                                ::jenner::__private::Future::poll(
-                                    ::jenner::__private::pin::Pin::new_unchecked(&mut fut),
-                                    __cx_OsN5tXI.get_context(),
-                                )
-                            };
-                            match polled {
-                                ::jenner::__private::task::Poll::Ready(r) => break r,
-                                ::jenner::__private::task::Poll::Pending => {
-                                    yield ::jenner::__private::task::Poll::Pending;
-                                }
-                            }
-                        }
-                    }?;
-                    Ok(span)
-                },
-            )
-        }
+    fn parse<'life0, 'gen>(
+        &'life0 self,
+        cursor: BufCursor<R>,
+    ) -> Pin<
+        Box<
+            dyn AsyncGenerator<Self::Yields, io::Result<(BufCursor<R>, Self::Output)>>
+                + Send
+                + 'gen,
+        >,
+    >
+    where
+        'life0: 'gen,
+        Self: Sync + 'gen,
+        BufCursor<R>: Send,
+    {
+        Box::pin(async_generator!{
+            let fut = cursor.take_from(self.0.len());
+            let span = fut.await?;
+            Ok(span)
+        })
+        // Box::pin(unsafe {
+        //     ::jenner::GeneratorImpl::new_async::<!, _>(
+        //         static |mut __cx_OsN5tXI: ::jenner::__private::UnsafeContextRef| {
+        //             let span = {
+        //                 let mut fut = { cursor.take_from(self.0.len()) };
+        //                 loop {
+        //                     let polled = unsafe {
+        //                         ::jenner::__private::Future::poll(
+        //                             ::jenner::__private::pin::Pin::new_unchecked(&mut fut),
+        //                             __cx_OsN5tXI.get_context(),
+        //                         )
+        //                     };
+        //                     match polled {
+        //                         ::jenner::__private::task::Poll::Ready(r) => break r,
+        //                         ::jenner::__private::task::Poll::Pending => {
+        //                             yield ::jenner::__private::task::Poll::Pending;
+        //                         }
+        //                     }
+        //                 }
+        //             }?;
+        //             Ok(span)
+        //         },
+        //     )
+        // })
     }
 }
+
+// #[async_trait::async_trait]
+// trait Foo {
+//     async fn bar(&self, input: Baz) -> Output {
+//         x;
+//         y.await;
+//         z
+//     }
+//     ::core::pin::Pin<Box<dyn::core::future::Future<Output = Output> + ::core::marker::Send+ 'async_trait> >where 'life0: 'async_trait,Self: ::core::marker::Sync+ 'async_trait
+// }

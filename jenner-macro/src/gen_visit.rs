@@ -41,11 +41,11 @@ impl GenVisitor {
 
         if sync {
             parse_quote! {
-                unsafe { ::jenner::GeneratorImpl::new_sync::<#y, _>(move || { #(#stmts)* }) }
+                unsafe { ::jenner::GeneratorImpl::new_sync::<#y, _>(static || { #(#stmts)* }) }
             }
         } else {
             parse_quote! {
-                unsafe { ::jenner::GeneratorImpl::new_async::<#y, _>(move |mut #cx: ::jenner::__private::UnsafeContextRef| { #(#stmts)* }) }
+                unsafe { ::jenner::GeneratorImpl::new_async::<#y, _>(static |mut #cx: ::jenner::__private::UnsafeContextRef| { #(#stmts)* }) }
             }
         }
     }
