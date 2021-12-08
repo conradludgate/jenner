@@ -1,4 +1,9 @@
-#![feature(generators, never_type, type_alias_impl_trait)]
+#![feature(
+    generators,
+    never_type,
+    type_alias_impl_trait,
+    generic_associated_types
+)]
 
 use std::{marker::PhantomData, pin::Pin};
 
@@ -18,19 +23,30 @@ pub struct Cursor {
 
 #[derive(Clone, Copy)]
 pub struct Span {
-    bytes: (usize, usize), // Range<usize>
+    pub bytes: (usize, usize), // Range<usize>
 }
 
 impl<R: AsyncRead + Unpin> Buf<R> {
+    pub fn new(reader: R) -> (Self, Cursor) {
+        (
+            Self {
+                buffer: vec![],
+                reader,
+            },
+            Cursor { idx: 0 },
+        )
+    }
+
     pub async fn ensure(&mut self, n: usize) -> io::Result<()> {
         // if not enough bytes available
         if n > self.buffer.len() {
-            let mut diff = n - self.buffer.len();
+            let diff = n - self.buffer.len();
             self.buffer
                 .try_reserve(diff)
                 .map_err(|_| io::ErrorKind::OutOfMemory)?;
 
-            while diff > 0 {
+            let mut n = 0;
+            while diff > n {
                 let r = self.reader.read_buf(&mut self.buffer).await?;
                 if r == 0 {
                     return Err(io::Error::new(
@@ -38,7 +54,7 @@ impl<R: AsyncRead + Unpin> Buf<R> {
                         format!("needed {} more bytes", diff),
                     ));
                 }
-                diff -= r;
+                n += r;
             }
         }
 
@@ -81,20 +97,16 @@ impl<R: AsyncRead + Unpin> BufCursor<R> {
     }
 }
 
-pub trait Parser<R: AsyncRead + Unpin> {
+pub trait Parser<'gen, R: AsyncRead + Unpin>
+where
+    Self: 'gen,
+{
     type Yields;
     type Output;
+    type AsyncGenerator: AsyncGenerator<Self::Yields, io::Result<(BufCursor<R>, Self::Output)>>
+        + 'gen;
 
-    fn parse<'life0, 'gen>(
-        &'life0 self,
-        cursor: BufCursor<R>,
-    ) -> Pin<
-        Box<
-            dyn AsyncGenerator<Self::Yields, io::Result<(BufCursor<R>, Self::Output)>>
-                + Send
-                + 'gen,
-        >,
-    >
+    fn parse<'life0>(&'life0 self, cursor: BufCursor<R>) -> Self::AsyncGenerator
     where
         'life0: 'gen,
         Self: 'gen;
@@ -103,6 +115,7 @@ pub trait Parser<R: AsyncRead + Unpin> {
 pub trait Parser3<R: AsyncRead + Unpin> {
     type Yields;
     type Output;
+
     #[must_use]
     #[allow(clippy::type_complexity, clippy::type_repetition_in_bounds)]
     fn parse<'life0, 'async_trait>(
@@ -120,32 +133,30 @@ pub trait Parser3<R: AsyncRead + Unpin> {
         Self: 'async_trait;
 }
 
-pub struct Tag(pub [u8]);
+#[repr(transparent)]
+pub struct Tag([u8]);
+pub fn tag(t: &[u8]) -> &Tag {
+    let p = t as *const _ as *const Tag;
+    unsafe { &*p }
+}
 
-impl<R: AsyncRead + Unpin + Send + 'static> Parser<R> for Tag {
+impl<'gen, R: AsyncRead + Unpin + Send + 'static> Parser<'gen, R> for Tag {
     type Yields = !;
     type Output = Span;
+    type AsyncGenerator =
+        impl AsyncGenerator<Self::Yields, io::Result<(BufCursor<R>, Self::Output)>> + 'gen;
 
-    fn parse<'life0, 'gen>(
-        &'life0 self,
-        cursor: BufCursor<R>,
-    ) -> Pin<
-        Box<
-            dyn AsyncGenerator<Self::Yields, io::Result<(BufCursor<R>, Self::Output)>>
-                + Send
-                + 'gen,
-        >,
-    >
+    fn parse<'life0>(&'life0 self, cursor: BufCursor<R>) -> Self::AsyncGenerator
     where
         'life0: 'gen,
         Self: Sync + 'gen,
         BufCursor<R>: Send,
     {
-        Box::pin(async_generator!{
+        async_generator! {
             let fut = cursor.take_from(self.0.len());
             let span = fut.await?;
             Ok(span)
-        })
+        }
         // Box::pin(unsafe {
         //     ::jenner::GeneratorImpl::new_async::<!, _>(
         //         static |mut __cx_OsN5tXI: ::jenner::__private::UnsafeContextRef| {
@@ -182,3 +193,16 @@ impl<R: AsyncRead + Unpin + Send + 'static> Parser<R> for Tag {
 //     }
 //     ::core::pin::Pin<Box<dyn::core::future::Future<Output = Output> + ::core::marker::Send+ 'async_trait> >where 'life0: 'async_trait,Self: ::core::marker::Sync+ 'async_trait
 // }
+
+#[tokio::test]
+async fn test_parse() {
+    let input = b"foobar";
+    let (buf, cur) = Buf::new(&input[..]);
+    let buffer = BufCursor { buf, cur };
+
+    let (buffer, foo) = tag(b"foo").parse(buffer).await.unwrap();
+    let (buffer, bar) = tag(b"bar").parse(buffer).await.unwrap();
+
+    assert_eq!(foo.bytes, (0, 3));
+    assert_eq!(bar.bytes, (3, 6));
+}
