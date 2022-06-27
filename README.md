@@ -6,9 +6,9 @@ streams using a much easier syntax, much akin to how async/await futures work to
 ## Example
 
 ```rust
-#![feature(generators, generator_trait, never_type)] // required nightly feature
+#![feature(generators, generator_trait, never_type, into_future, async_iterator)] // required nightly feature
 use jenner::generator;
-use futures_core::{Future, Stream}; // Streams provided by futures
+use std::{future::Future, async_iter::AsyncIterator};
 
 /// Creating brand new streams
 #[generator]
@@ -26,7 +26,7 @@ async fn countdown() {
 /// Consuming streams to create new streams (akin to input.map())
 #[generator]
 #[yields(u32)]
-async fn double(input: impl Stream<Item = u32>) {
+async fn double(input: impl AsyncIterator<Item = u32>) {
     // custom async for syntax handles the polling of the stream automatically for you
     for i in input {
         yield i * 2;
@@ -35,7 +35,7 @@ async fn double(input: impl Stream<Item = u32>) {
 
 /// Futures are also supported
 #[generator]
-async fn collect<T: std::fmt::Debug>(input: impl Stream<Item = T>) -> Vec<T> {
+async fn collect<T: std::fmt::Debug>(input: impl AsyncIterator<Item = T>) -> Vec<T> {
     let mut v = vec![];
     for i in input {
         println!("{:?}", i);
@@ -56,8 +56,8 @@ Firstly, the function signature is re-written to
 
 ```rust
 fn countdown() -> impl ::jenner::AsyncGenerator<u32, ()>;
-fn double(input: impl Stream<Item = u32>) -> impl ::jenner::AsyncGenerator<u32, ()>;
-fn collect(input: impl Stream<Item = u32>) -> impl ::jenner::AsyncGenerator<!, Vec<u32>>; // never yields
+fn double(input: impl AsyncIterator<Item = u32>) -> impl ::jenner::AsyncGenerator<u32, ()>;
+fn collect(input: impl AsyncIterator<Item = u32>) -> impl ::jenner::AsyncGenerator<!, Vec<u32>>; // never yields
 ```
 
 Then, the function body is wrapped in this expression
@@ -72,7 +72,7 @@ unsafe {
 
 The `new_async` function is fairly simple.
 It accepts a `Generator<Yield = Poll<Y>, Return = R>` and returns an `AsyncGenerator<Y, R>` type,
-which implements both `Stream<Item = Y>` and `Future<Output = R>`.
+which implements both `AsyncIterator<Item = Y>` and `Future<Output = R>`.
 
 ### Yields
 
@@ -105,13 +105,16 @@ into
 
 ```rust
 {
-    let mut fut = $expr;
+    let fut = $expr;
+    let mut fut = IntoFuture::into_future(fut);
     loop {
         let pinned = unsafe { Pin::new_unchecked(&mut fut) };
-        let polled = Future::poll(pinned, __cx.get_context());
+        let polled = Future::poll(pinned, &mut *__cx);
         match polled {
             Poll::Ready(r) => break r,
-            Poll::Pending => yield Poll::Pending,
+            Poll::Pending => {
+                __cx = yield Poll::Pending,
+            }
         }
     }
 }
@@ -161,10 +164,12 @@ When processed, the code turns into
     let res: ::jenner::ForResult<_, _> = loop {
         let next = loop {
             let pinned = unsafe { Pin::new_unchecked(&mut fut) };
-            let polled = Stream::poll_resume(pinned, __cx.get_context());
+            let polled = AsyncIterator::poll_resume(pinned, &mut* __cx);
             match polled {
                 Poll::Ready(r) => break r,
-                Poll::Pending => yield Poll::Pending,
+                Poll::Pending => {
+                    _cx = yield Poll::Pending;
+                }
             }
         };
         match next {
@@ -215,7 +220,7 @@ fn make_requests() -> Result<(), &'static str> {
 ```
 
 This requires no extra special code, except for ensuring that the return type is well defined.
-In this case, that's performed by ensuring the return value is both `Stream + Future`, specifying the
+In this case, that's performed by ensuring the return value is both `AsyncIterator + Future`, specifying the
 output of the future to be a result.
 
 This is also not exclusive to `Result`, any it supports anything that the regular `try` syntax supports.

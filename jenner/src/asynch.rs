@@ -1,5 +1,6 @@
-use futures_core::{Future, Stream};
 use std::{
+    async_iter::AsyncIterator,
+    future::Future,
     ops::{Generator, GeneratorState},
     pin::Pin,
     ptr::NonNull,
@@ -13,7 +14,7 @@ pub struct UnsafeContextRef(NonNull<Context<'static>>);
 
 impl UnsafeContextRef {
     #[doc(hidden)]
-    pub unsafe fn get_context(&mut self) -> &mut Context<'_> {
+    pub unsafe fn get_context<'a, 'b>(&mut self) -> &'a mut Context<'b> {
         std::mem::transmute(self.0)
     }
 }
@@ -36,8 +37,8 @@ impl<G> GeneratorImpl<G> {
     }
 }
 
-/// This trait is a combination of [`Stream`], [`Future`] and [`Generator`] all in one neat package.
-pub trait AsyncGenerator<Y, R>: Stream<Item = Y> + Future<Output = R> {
+/// This trait is a combination of [`AsyncIterator`], [`Future`] and [`Generator`] all in one neat package.
+pub trait AsyncGenerator<Y, R>: AsyncIterator<Item = Y> + Future<Output = R> {
     /// Poll the async generator, resuming it's execution until the next yield or await.
     ///
     /// Possible outcomes:
@@ -56,14 +57,14 @@ pub trait AsyncGenerator<Y, R>: Stream<Item = Y> + Future<Output = R> {
     }
 }
 
-impl<Y, G> Stream for GeneratorImpl<G>
+impl<Y, G> AsyncIterator for GeneratorImpl<G>
 where
     G: Generator<UnsafeContextRef, Yield = Poll<Y>>,
 {
     type Item = Y;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match self.project().generator.resume(cx.into()) {
+        match self.project_generator().resume(cx.into()) {
             GeneratorState::Yielded(p) => p.map(Some),
             GeneratorState::Complete(_) => Poll::Ready(None),
         }
@@ -78,7 +79,7 @@ where
     type Output = R;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.project().generator.resume(cx.into()) {
+        match self.project_generator().resume(cx.into()) {
             GeneratorState::Yielded(_) => Poll::Pending,
             GeneratorState::Complete(r) => Poll::Ready(r),
         }
@@ -93,7 +94,7 @@ where
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<GeneratorState<Y, G::Return>> {
-        match self.project().generator.resume(cx.into()) {
+        match self.project_generator().resume(cx.into()) {
             GeneratorState::Yielded(p) => p.map(GeneratorState::Yielded),
             GeneratorState::Complete(r) => Poll::Ready(GeneratorState::Complete(r)),
         }

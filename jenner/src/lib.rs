@@ -1,14 +1,16 @@
+#![feature(into_future, async_iterator)]
+
 //! A set of traits and proc-macros involved in making and using generators
-//! to create [`Stream`](futures_core::Stream)s, [`Future`](futures_core::Future)s and [`Iterator`]s
+//! to create [`AsyncIterator`](std::async_iter::AsyncIterator)s, [`Future`](std::future::Future)s and [`Iterator`]s
 //!
 //! # Asynchronous example
 //!
 //! ```rust
 //! // a couple required nightly features
-//! #![feature(generators, generator_trait, never_type)]
+//! #![feature(generators, generator_trait, never_type, into_future, async_iterator)]
 //!
 //! use jenner::generator;
-//! use futures_core::Stream;
+//! use std::async_iter::AsyncIterator;
 //! use std::time::{Instant, Duration};
 //!
 //! /// Creates a stream that yields u32s that countdown from 5 to 0.
@@ -26,7 +28,7 @@
 //! /// Iterates over the provided stream, printing the value and
 //! /// pushing it to a vec that is returned
 //! #[generator]
-//! async fn collect(input: impl Stream<Item = u32>) -> Vec<u32> {
+//! async fn collect(input: impl AsyncIterator<Item = u32>) -> Vec<u32> {
 //!     let mut v = vec![];
 //!
 //!     for i in input {
@@ -80,20 +82,22 @@
 //! ```
 #![feature(generator_trait, never_type, unwrap_infallible)]
 
+use std::pin::Pin;
+
 /// From the provided generator body, it creates an [`impl AsyncGenerator<Y, R>`](AsyncGenerator) type that implements
-/// both [`Future<Output = R>`](futures_core::Future) and [`Stream<Item = Y>`](futures_core::Stream).
+/// both [`Future<Output = R>`](std::future::Future) and [`AsyncIterator<Item = Y>`](std::async_iter::AsyncIterator).
 ///
 /// ```
-/// #![feature(generators, generator_trait, never_type)]
+/// #![feature(generators, generator_trait, never_type, into_future, async_iterator)]
 ///
 /// use jenner::async_generator;
-/// use futures_core::Stream;
+/// use std::async_iter::AsyncIterator;
 /// use std::future::Future;
 /// use std::time::{Instant, Duration};
 ///
 /// /// Creates a stream that yields u32s that countdown from 5 to 0.
 /// /// Waiting 0.2s between each (1s total)
-/// fn countdown() -> impl Stream<Item = u32> {
+/// fn countdown() -> impl AsyncIterator<Item = u32> {
 ///     async_generator!{
 ///         yield 5;
 ///         for i in (0..5).rev() {
@@ -105,7 +109,7 @@
 ///
 /// /// Iterates over the provided stream, printing the value and
 /// /// pushing it to a vec that is returned
-/// fn collect(input: impl Stream<Item = u32>) -> impl Future<Output = Vec<u32>> {
+/// fn collect(input: impl AsyncIterator<Item = u32>) -> impl Future<Output = Vec<u32>> {
 ///     async_generator!{
 ///         let mut v = vec![];
 ///
@@ -139,10 +143,10 @@ pub use jenner_macro::async_generator;
 ///
 /// ```
 /// // a couple required nightly features
-/// #![feature(generators, generator_trait, never_type)]
+/// #![feature(generators, generator_trait, never_type, into_future, async_iterator)]
 ///
 /// use jenner::generator;
-/// use futures_core::Stream;
+/// use std::async_iter::AsyncIterator;
 /// use std::time::{Instant, Duration};
 ///
 /// /// Creates a stream that yields u32s that countdown from 5 to 0.
@@ -160,7 +164,7 @@ pub use jenner_macro::async_generator;
 /// /// Iterates over the provided stream, printing the value and
 /// /// pushing it to a vec that is returned
 /// #[generator]
-/// async fn collect(input: impl Stream<Item = u32>) -> Vec<u32> {
+/// async fn collect(input: impl AsyncIterator<Item = u32>) -> Vec<u32> {
 ///     let mut v = vec![];
 ///
 ///     for i in input {
@@ -228,15 +232,22 @@ pub mod __private {
     pub use crate::asynch::UnsafeContextRef;
     pub use crate::iter::IntoSyncGenerator;
     pub use crate::stream::IntoAsyncGenerator;
-    pub use futures_core::{Future, Stream};
+    pub use std::async_iter::AsyncIterator;
+    pub use std::future::{Future, IntoFuture};
     pub use std::{ops::GeneratorState, pin, task};
 }
 
-#[pin_project::pin_project]
 #[doc(hidden)]
 pub struct GeneratorImpl<G> {
-    #[pin]
     generator: G,
+}
+impl<G> Unpin for GeneratorImpl<G> {}
+
+impl<G> GeneratorImpl<G> {
+    fn project_generator(self: Pin<&mut Self>) -> Pin<&mut G> {
+        let Self { generator } = self.get_mut();
+        unsafe { Pin::new_unchecked(generator) }
+    }
 }
 
 /// Type returned by `.await`ed for loops

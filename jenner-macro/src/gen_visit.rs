@@ -3,8 +3,11 @@ use quote::format_ident;
 use rand::{distributions::Alphanumeric, Rng};
 use syn::{
     parse_quote,
+    punctuated::Punctuated,
+    token,
     visit_mut::{visit_expr_method_call_mut, visit_expr_mut, visit_expr_yield_mut, VisitMut},
-    Expr, ExprAwait, ExprForLoop, ExprMethodCall, ExprYield, Stmt, Type,
+    Expr, ExprAssign, ExprAwait, ExprCall, ExprForLoop, ExprMethodCall, ExprPath, ExprTuple,
+    ExprYield, Stmt, Type,
 };
 
 use crate::break_visit::BreakVisitor;
@@ -65,23 +68,38 @@ impl VisitMut for GenVisitor {
 
                 let cx = &self.cx;
                 *i = parse_quote! {{
-                    let mut fut = #(#attrs)* { #base };
+                    let fut = #(#attrs)* { #base };
+                    let mut fut = ::jenner::__private::IntoFuture::into_future(fut);
 
                     loop {
-                        let polled = unsafe {
-                            ::jenner::__private::Future::poll(
-                                ::jenner::__private::pin::Pin::new_unchecked(&mut fut),
-                                #cx.get_context()
-                            )
-                        };
+                        let fut = unsafe { ::jenner::__private::pin::Pin::new_unchecked(&mut fut) };
+                        let cx = unsafe { #cx.get_context() };
+                        let polled = ::jenner::__private::Future::poll(fut, cx);
                         match polled {
                             ::jenner::__private::task::Poll::Ready(r) => break r,
                             ::jenner::__private::task::Poll::Pending => {
-                                yield ::jenner::__private::task::Poll::Pending;
+                                #cx = yield ::jenner::__private::task::Poll::Pending;
                             }
                         }
                     }
                 }}
+            }
+            Expr::Yield(yield_) if !self.sync => {
+                self.visit_expr_yield_mut(yield_);
+                *i = ExprAssign {
+                    attrs: vec![],
+                    left: Box::new(
+                        ExprPath {
+                            attrs: vec![],
+                            qself: None,
+                            path: self.cx.clone().into(),
+                        }
+                        .into(),
+                    ),
+                    eq_token: Default::default(),
+                    right: Box::new(yield_.clone().into()),
+                }
+                .into();
             }
             Expr::MethodCall(m) if m.method == "finally" => {
                 visit_expr_method_call_mut(self, m);
@@ -99,12 +117,28 @@ impl VisitMut for GenVisitor {
     fn visit_expr_yield_mut(&mut self, i: &mut ExprYield) {
         self.yields += 1;
         visit_expr_yield_mut(self, i);
-        let ExprYield { attrs, expr, .. } = i;
+        let ExprYield { expr, .. } = i;
+        let expr = expr.get_or_insert_with(|| {
+            Box::new(
+                ExprTuple {
+                    attrs: vec![],
+                    paren_token: token::Paren::default(),
+                    elems: Punctuated::new(),
+                }
+                .into(),
+            )
+        });
 
-        let expr = expr.get_or_insert_with(|| Box::new(parse_quote! { () }));
-        *expr = parse_quote! {
-            ::jenner::__private::task::Poll::Ready( #(#attrs)* { #expr } )
-        };
+        **expr = Expr::Call(ExprCall {
+            attrs: vec![],
+            func: Box::new(Expr::Path(ExprPath {
+                attrs: vec![],
+                qself: None,
+                path: new_path!(::jenner::__private::task::Poll::Ready),
+            })),
+            paren_token: Default::default(),
+            args: [*expr.clone()].into_iter().collect(),
+        });
     }
 }
 
@@ -155,7 +189,7 @@ impl GenVisitor {
                             match polled {
                                 ::jenner::__private::task::Poll::Ready(r) => break r,
                                 ::jenner::__private::task::Poll::Pending => {
-                                    yield ::jenner::__private::task::Poll::Pending;
+                                    #cx = yield ::jenner::__private::task::Poll::Pending;
                                 }
                             }
                         };
@@ -207,9 +241,9 @@ impl GenVisitor {
                         use ::jenner::{__private::IntoSyncGenerator, SyncGenerator};
                         __gen.into_sync_generator()
                     };
+                    let mut __pinned = unsafe { ::jenner::__private::pin::Pin::new_unchecked(&mut __gen) };
                     let res: ::jenner::ForResult<#break_ty, _> = #label loop {
-                        let __pinned = unsafe { ::jenner::__private::pin::Pin::new_unchecked(&mut __gen) };
-                        let __state = ::jenner::SyncGenerator::resume(__pinned);
+                        let __state = ::jenner::SyncGenerator::resume(::jenner::__private::pin::Pin::as_mut(&mut __pinned));
                         match __state {
                             ::jenner::__private::GeneratorState::Yielded(#pat) => #body,
                             ::jenner::__private::GeneratorState::Complete(c) => break ::jenner::ForResult::Complete(c),

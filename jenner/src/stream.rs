@@ -1,11 +1,10 @@
 use std::{
+    async_iter::AsyncIterator,
+    future::Future,
     ops::GeneratorState,
     pin::Pin,
     task::{Context, Poll},
 };
-
-use futures_core::{Future, Stream};
-use pin_project::pin_project;
 
 use crate::AsyncGenerator;
 
@@ -19,7 +18,7 @@ pub trait IntoAsyncGenerator {
 
 impl<S> IntoAsyncGenerator for S
 where
-    S: Stream,
+    S: AsyncIterator,
 {
     type Yield = S::Item;
     type Return = ();
@@ -31,31 +30,37 @@ where
 }
 
 #[doc(hidden)]
-#[pin_project]
 pub struct StreamGenerator<S> {
-    #[pin]
     stream: S,
 }
+impl<S> Unpin for StreamGenerator<S> {}
 
-impl<S> Stream for StreamGenerator<S>
+impl<S> StreamGenerator<S> {
+    fn project_stream(self: Pin<&mut Self>) -> Pin<&mut S> {
+        let Self { stream } = self.get_mut();
+        unsafe { Pin::new_unchecked(stream) }
+    }
+}
+
+impl<S> AsyncIterator for StreamGenerator<S>
 where
-    S: Stream,
+    S: AsyncIterator,
 {
     type Item = S::Item;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.project().stream.poll_next(cx)
+        self.project_stream().poll_next(cx)
     }
 }
 
 impl<S> Future for StreamGenerator<S>
 where
-    S: Stream,
+    S: AsyncIterator,
 {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.project().stream.poll_next(cx) {
+        match self.project_stream().poll_next(cx) {
             Poll::Pending | Poll::Ready(Some(_)) => Poll::Pending,
             Poll::Ready(None) => Poll::Ready(()),
         }
@@ -64,13 +69,13 @@ where
 
 impl<S> AsyncGenerator<S::Item, ()> for StreamGenerator<S>
 where
-    S: Stream,
+    S: AsyncIterator,
 {
     fn poll_resume(
         self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<GeneratorState<S::Item, ()>> {
-        match self.project().stream.poll_next(cx) {
+        match self.project_stream().poll_next(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(Some(r)) => Poll::Ready(GeneratorState::Yielded(r)),
             Poll::Ready(None) => Poll::Ready(GeneratorState::Complete(())),

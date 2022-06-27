@@ -78,6 +78,6 @@ where
     G: Generator<(), Yield = Y, Return = R>,
 {
     fn resume(self: Pin<&mut Self>) -> GeneratorState<Y, R> {
-        self.project().generator.resume(())
+        self.project_generator().resume(())
     }
 }

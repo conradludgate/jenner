@@ -1,7 +1,5 @@
 use std::{ops::GeneratorState, pin::Pin};
 
-use pin_project::pin_project;
-
 use crate::{Finally, SyncGenerator};
 
 #[doc(hidden)]
@@ -26,10 +24,11 @@ where
 }
 
 #[doc(hidden)]
-#[pin_project]
 pub struct IterGenerator<I> {
     iter: I,
 }
+
+impl<I> Unpin for IterGenerator<I> {}
 
 impl<I> Iterator for IterGenerator<I>
 where
@@ -54,8 +53,8 @@ impl<S> SyncGenerator<S::Item, ()> for IterGenerator<S>
 where
     S: Iterator,
 {
-    fn resume(self: Pin<&mut Self>) -> GeneratorState<S::Item, ()> {
-        match self.project().iter.next() {
+    fn resume(mut self: Pin<&mut Self>) -> GeneratorState<S::Item, ()> {
+        match self.iter.next() {
             Some(r) => GeneratorState::Yielded(r),
             None => GeneratorState::Complete(()),
         }

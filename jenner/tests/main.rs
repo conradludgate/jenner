@@ -1,9 +1,17 @@
-#![feature(generators, generator_trait, never_type)]
-#![feature(stmt_expr_attributes)]
+#![feature(
+    generators,
+    generator_trait,
+    never_type,
+    stmt_expr_attributes,
+    into_future,
+    async_iterator
+)]
 
-use futures_core::Stream;
 use jenner::{generator, AsyncGenerator};
-use std::time::{Duration, Instant};
+use std::{
+    async_iter::AsyncIterator,
+    time::{Duration, Instant},
+};
 
 #[tokio::test]
 async fn streams() {
@@ -27,7 +35,7 @@ async fn countdown() {
 
 #[generator]
 #[yields(u32)]
-async fn double(input: impl Stream<Item = u32>) {
+async fn double(input: impl AsyncIterator<Item = u32>) {
     for i in input {
         yield i * 2;
     }
@@ -35,7 +43,7 @@ async fn double(input: impl Stream<Item = u32>) {
 }
 
 #[generator]
-async fn collect<T: std::fmt::Debug>(input: impl Stream<Item = T>) -> Vec<T> {
+async fn collect<T: std::fmt::Debug>(input: impl AsyncIterator<Item = T>) -> Vec<T> {
     let mut v = vec![];
     for i in input {
         println!("got {:?}", i);
