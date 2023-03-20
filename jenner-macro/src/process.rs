@@ -1,4 +1,8 @@
-use syn::{parse2, parse_quote, Attribute, Expr, ItemFn, Result, Signature, Stmt, Type};
+use syn::spanned::Spanned;
+use syn::{
+    parse2, parse_quote, Attribute, Error, Expr, ExprLit, ItemFn, Lit, Result, Signature, Stmt,
+    Type,
+};
 
 use crate::{
     gen_visit::GenVisitor,
@@ -35,7 +39,7 @@ impl AttrGenerator {
 
         let mut visitor = GenVisitor::new(sync);
         visitor.yields = 1; // force yield inference
-        block.stmts = vec![Stmt::Expr(visitor.into_generator(&mut block.stmts))];
+        block.stmts = vec![Stmt::Expr(visitor.into_generator(&mut block.stmts), None)];
         Ok(self.func)
     }
 
@@ -48,10 +52,22 @@ impl AttrGenerator {
 
     fn parse_yield_ty(attrs: &mut Vec<Attribute>) -> Result<Type> {
         let yields = attrs
-            .drain_filter(|attr| attr.path.get_ident().map_or(false, |i| i == "yields"))
+            .drain_filter(|attr| attr.path().get_ident().map_or(false, |i| i == "yields"))
             .next();
         match yields {
-            Some(t) => parse2(t.tokens),
+            Some(t) => match t.meta {
+                syn::Meta::Path(path) => Err(Error::new(path.span(), "needs a value")),
+                syn::Meta::List(list) => parse2(list.tokens),
+                syn::Meta::NameValue(nv) => match nv.value {
+                    Expr::Lit(ExprLit {
+                        lit: Lit::Str(ty), ..
+                    }) => ty.parse(),
+                    _ => Err(Error::new(
+                        nv.span(),
+                        "needs a string value representing a type",
+                    )),
+                },
+            },
             None => Ok(parse_quote! { ! }),
         }
     }

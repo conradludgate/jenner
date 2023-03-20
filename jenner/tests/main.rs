@@ -3,7 +3,6 @@
     generator_trait,
     never_type,
     stmt_expr_attributes,
-    into_future,
     async_iterator
 )]
 

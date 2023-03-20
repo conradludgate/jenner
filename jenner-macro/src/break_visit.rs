@@ -53,7 +53,6 @@ impl<'f> VisitMut for BreakVisitor<'f> {
             | syn::Item::ForeignMod(_)
             | syn::Item::Impl(_)
             | syn::Item::Macro(_)
-            | syn::Item::Macro2(_)
             | syn::Item::Mod(_)
             | syn::Item::Trait(_) => {}
 

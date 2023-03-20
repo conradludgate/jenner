@@ -18,7 +18,7 @@ quote = "1.0"
 rand = "0.8.4"
 
 [dependencies.syn]
-version = "1.0"
+version = "2.0"
 default-features = false
 features = [
     "full",
