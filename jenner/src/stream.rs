@@ -1,12 +1,11 @@
 use std::{
-    async_iter::AsyncIterator,
     future::Future,
     ops::GeneratorState,
     pin::Pin,
-    task::{Context, Poll},
+    task::{Context, Poll}, convert::Infallible,
 };
 
-use crate::AsyncGenerator;
+use effective::{Effective, Multiple, Async};
 
 #[doc(hidden)]
 pub trait IntoAsyncGenerator {
@@ -18,7 +17,7 @@ pub trait IntoAsyncGenerator {
 
 impl<S> IntoAsyncGenerator for S
 where
-    S: AsyncIterator,
+    S: Effective<Produces = Multiple, Async = Async>,
 {
     type Yield = S::Item;
     type Return = ();
@@ -42,43 +41,43 @@ impl<S> StreamGenerator<S> {
     }
 }
 
-impl<S> AsyncIterator for StreamGenerator<S>
-where
-    S: AsyncIterator,
-{
-    type Item = S::Item;
+// impl<S> AsyncIterator for StreamGenerator<S>
+// where
+//     S: AsyncIterator,
+// {
+//     type Item = S::Item;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.project_stream().poll_next(cx)
-    }
-}
+//     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+//         self.project_stream().poll_next(cx)
+//     }
+// }
 
-impl<S> Future for StreamGenerator<S>
-where
-    S: AsyncIterator,
-{
-    type Output = ();
+// impl<S> Future for StreamGenerator<S>
+// where
+//     S: AsyncIterator,
+// {
+//     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.project_stream().poll_next(cx) {
-            Poll::Pending | Poll::Ready(Some(_)) => Poll::Pending,
-            Poll::Ready(None) => Poll::Ready(()),
-        }
-    }
-}
+//     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+//         match self.project_stream().poll_next(cx) {
+//             Poll::Pending | Poll::Ready(Some(_)) => Poll::Pending,
+//             Poll::Ready(None) => Poll::Ready(()),
+//         }
+//     }
+// }
 
-impl<S> AsyncGenerator<S::Item, ()> for StreamGenerator<S>
-where
-    S: AsyncIterator,
-{
-    fn poll_resume(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<GeneratorState<S::Item, ()>> {
-        match self.project_stream().poll_next(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(Some(r)) => Poll::Ready(GeneratorState::Yielded(r)),
-            Poll::Ready(None) => Poll::Ready(GeneratorState::Complete(())),
-        }
-    }
-}
+// impl<S> AsyncGenerator<S::Item, ()> for StreamGenerator<S>
+// where
+//     S: AsyncIterator,
+// {
+//     fn poll_resume(
+//         self: Pin<&mut Self>,
+//         cx: &mut Context<'_>,
+//     ) -> Poll<GeneratorState<S::Item, ()>> {
+//         match self.project_stream().poll_next(cx) {
+//             Poll::Pending => Poll::Pending,
+//             Poll::Ready(Some(r)) => Poll::Ready(GeneratorState::Yielded(r)),
+//             Poll::Ready(None) => Poll::Ready(GeneratorState::Complete(())),
+//         }
+//     }
+// }

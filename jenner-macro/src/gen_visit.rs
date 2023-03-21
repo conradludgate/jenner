@@ -14,12 +14,12 @@ use crate::break_visit::BreakVisitor;
 
 pub struct GenVisitor {
     pub cx: Ident,
-    pub yields: usize,
     pub sync: bool,
+    pub yields: bool,
 }
 
 impl GenVisitor {
-    pub fn new(sync: bool) -> Self {
+    pub fn new(sync: bool, yields: bool) -> Self {
         let random: String = rand::thread_rng()
             .sample_iter(&Alphanumeric)
             .take(7)
@@ -27,8 +27,8 @@ impl GenVisitor {
             .collect();
         GenVisitor {
             cx: format_ident!("__cx_{}", random),
-            yields: 0,
             sync,
+            yields,
         }
     }
 
@@ -38,19 +38,35 @@ impl GenVisitor {
         }
 
         let Self { cx, yields, sync } = self;
-        let y: Type = (yields == 0)
-            .then(|| parse_quote! { ! })
-            .unwrap_or_else(|| parse_quote! { _ });
 
-        if sync {
-            parse_quote! {
-                unsafe { ::jenner::GeneratorImpl::new_sync::<#y, _>(|| { #(#stmts)* }) }
-            }
-        } else {
-            parse_quote! {
-                unsafe { ::jenner::GeneratorImpl::new_async::<#y, _>(|mut #cx: ::jenner::__private::UnsafeContextRef| { #(#stmts)* }) }
-            }
+        match (sync, yields) {
+            (true, true) => parse_quote! {
+                unsafe { ::jenner::__private::SyncGeneratorImpl::create(|| { #(#stmts)* }) }
+            },
+            (true, false) => parse_quote! {
+                unsafe { ::jenner::__private::effective::wrappers::from_fn_once(|| { #(#stmts)* }) }
+            },
+            (false, true) => parse_quote! {
+                unsafe { ::jenner::__private::AsyncGeneratorImpl::create(
+                    |mut #cx: ::jenner::__private::UnsafeContextRef| { #(#stmts)* }
+                ) }
+            },
+            (false, false) => parse_quote! {
+                unsafe { ::jenner::__private::AsyncImpl::create(
+                    |mut #cx: ::jenner::__private::UnsafeContextRef| { #(#stmts)* }
+                ) }
+            },
         }
+
+        // if sync {
+        //     parse_quote! {
+        //         unsafe { ::jenner::GeneratorImpl::new_sync::<#y, _>(|| { #(#stmts)* }) }
+        //     }
+        // } else {
+        //     parse_quote! {
+        //         unsafe { ::jenner::GeneratorImpl::new_async::<#y, _>(|mut #cx: ::jenner::__private::UnsafeContextRef| { #(#stmts)* }) }
+        //     }
+        // }
     }
 }
 
@@ -115,7 +131,6 @@ impl VisitMut for GenVisitor {
     }
 
     fn visit_expr_yield_mut(&mut self, i: &mut ExprYield) {
-        self.yields += 1;
         visit_expr_yield_mut(self, i);
         let ExprYield { expr, .. } = i;
         let expr = expr.get_or_insert_with(|| {

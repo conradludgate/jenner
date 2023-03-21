@@ -1,13 +1,36 @@
 use std::{
-    async_iter::AsyncIterator,
-    future::Future,
+    convert::Infallible,
     ops::{Generator, GeneratorState},
     pin::Pin,
     ptr::NonNull,
     task::{Context, Poll},
 };
 
-use crate::GeneratorImpl;
+use effective::{Async, EffectResult, Effective, EffectiveResult, Failure, Multiple, Single};
+
+pin_project_lite::pin_project!(
+    #[doc(hidden)]
+    pub struct AsyncGeneratorImpl<G> {
+        #[pin]
+        generator: G,
+    }
+);
+
+pin_project_lite::pin_project!(
+    #[doc(hidden)]
+    pub struct AsyncFallibleGeneratorImpl<G> {
+        #[pin]
+        generator: G,
+    }
+);
+
+pin_project_lite::pin_project!(
+    #[doc(hidden)]
+    pub struct AsyncImpl<G> {
+        #[pin]
+        generator: G,
+    }
+);
 
 #[doc(hidden)]
 pub struct UnsafeContextRef(NonNull<Context<'static>>);
@@ -27,76 +50,93 @@ impl<'a> From<&mut Context<'a>> for UnsafeContextRef {
 
 unsafe impl Send for UnsafeContextRef {}
 
-impl<G> GeneratorImpl<G> {
+impl<G> AsyncGeneratorImpl<G> {
     #[doc(hidden)]
-    pub unsafe fn new_async<Y, R>(generator: G) -> impl AsyncGenerator<Y, R>
+    pub unsafe fn create<Y>(
+        generator: G,
+    ) -> impl Effective<Item = Y, Produces = Multiple, Failure = Infallible, Async = Async>
     where
-        G: Generator<UnsafeContextRef, Yield = Poll<Y>, Return = R>,
+        G: Generator<UnsafeContextRef, Yield = Poll<Y>, Return = ()>,
     {
         Self { generator }
     }
 }
 
-/// This trait is a combination of [`AsyncIterator`], [`Future`] and [`Generator`] all in one neat package.
-pub trait AsyncGenerator<Y, R>: AsyncIterator<Item = Y> + Future<Output = R> {
-    /// Poll the async generator, resuming it's execution until the next yield or await.
-    ///
-    /// Possible outcomes:
-    ///     `future.poll()` is `Pending` => returns `Poll::Pending`,
-    ///     `future.poll()` is `Ready(_)` => execution of generator continues until next yield point,
-    ///     `yield item;` => returns `Poll::Ready(GeneratorState::Yielded(item))`,
-    ///     `return item;` => returns `Poll::Ready(GeneratorState::Completed(item))`,
-    fn poll_resume(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<GeneratorState<Y, R>>;
-
+impl<G> AsyncFallibleGeneratorImpl<G> {
     #[doc(hidden)]
-    fn into_async_generator(self) -> Self
+    pub unsafe fn create<Y, E>(
+        generator: G,
+    ) -> impl Effective<Item = Y, Produces = Multiple, Failure = Failure<E>, Async = Async>
     where
-        Self: Sized,
+        G: Generator<UnsafeContextRef, Yield = Poll<Y>, Return = Result<(), E>>,
     {
-        self
+        Self { generator }
     }
 }
 
-impl<Y, G> AsyncIterator for GeneratorImpl<G>
+impl<G> AsyncImpl<G> {
+    #[doc(hidden)]
+    pub unsafe fn create<Y>(
+        generator: G,
+    ) -> impl Effective<Item = Y, Produces = Single, Failure = Infallible, Async = Async>
+    where
+        G: Generator<UnsafeContextRef, Yield = Poll<Infallible>, Return = Y>,
+    {
+        Self { generator }
+    }
+}
+
+impl<Y, G> Effective for AsyncGeneratorImpl<G>
 where
-    G: Generator<UnsafeContextRef, Yield = Poll<Y>>,
+    G: Generator<UnsafeContextRef, Yield = Poll<Y>, Return = ()>,
 {
     type Item = Y;
+    type Failure = Infallible;
+    type Produces = Multiple;
+    type Async = Async;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match self.project_generator().resume(cx.into()) {
-            GeneratorState::Yielded(p) => p.map(Some),
-            GeneratorState::Complete(_) => Poll::Ready(None),
+    fn poll_effect(self: Pin<&mut Self>, cx: &mut Context<'_>) -> EffectiveResult<Self> {
+        match self.project().generator.resume(cx.into()) {
+            GeneratorState::Yielded(Poll::Ready(x)) => EffectResult::Item(x),
+            GeneratorState::Yielded(Poll::Pending) => EffectResult::Pending(Async),
+            GeneratorState::Complete(()) => EffectResult::Done(Multiple),
         }
     }
 }
 
-/// Future evaluates to the return value of the async stream
-impl<R, G> Future for GeneratorImpl<G>
+impl<Y, E, G> Effective for AsyncFallibleGeneratorImpl<G>
 where
-    G: Generator<UnsafeContextRef, Return = R>,
+    G: Generator<UnsafeContextRef, Yield = Poll<Y>, Return = Result<(), E>>,
 {
-    type Output = R;
+    type Item = Y;
+    type Failure = Failure<E>;
+    type Produces = Multiple;
+    type Async = Async;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.project_generator().resume(cx.into()) {
-            GeneratorState::Yielded(_) => Poll::Pending,
-            GeneratorState::Complete(r) => Poll::Ready(r),
+    fn poll_effect(self: Pin<&mut Self>, cx: &mut Context<'_>) -> EffectiveResult<Self> {
+        match self.project().generator.resume(cx.into()) {
+            GeneratorState::Yielded(Poll::Ready(x)) => EffectResult::Item(x),
+            GeneratorState::Yielded(Poll::Pending) => EffectResult::Pending(Async),
+            GeneratorState::Complete(Err(e)) => EffectResult::Failure(Failure(e)),
+            GeneratorState::Complete(Ok(())) => EffectResult::Done(Multiple),
         }
     }
 }
 
-impl<Y, R, G> AsyncGenerator<Y, R> for GeneratorImpl<G>
+impl<Y, G> Effective for AsyncImpl<G>
 where
-    G: Generator<UnsafeContextRef, Yield = Poll<Y>, Return = R>,
+    G: Generator<UnsafeContextRef, Yield = Poll<Infallible>, Return = Y>,
 {
-    fn poll_resume(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<GeneratorState<Y, G::Return>> {
-        match self.project_generator().resume(cx.into()) {
-            GeneratorState::Yielded(p) => p.map(GeneratorState::Yielded),
-            GeneratorState::Complete(r) => Poll::Ready(GeneratorState::Complete(r)),
+    type Item = Y;
+    type Failure = Infallible;
+    type Produces = Single;
+    type Async = Async;
+
+    fn poll_effect(self: Pin<&mut Self>, cx: &mut Context<'_>) -> EffectiveResult<Self> {
+        match self.project().generator.resume(cx.into()) {
+            GeneratorState::Yielded(Poll::Ready(_)) => unreachable!(),
+            GeneratorState::Yielded(Poll::Pending) => EffectResult::Pending(Async),
+            GeneratorState::Complete(x) => EffectResult::Item(x),
         }
     }
 }

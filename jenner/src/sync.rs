@@ -1,83 +1,88 @@
-use crate::GeneratorImpl;
+use effective::{Blocking, EffectResult, Effective, EffectiveResult, Failure, Multiple};
+
 use std::{
+    convert::Infallible,
     ops::{Generator, GeneratorState},
     pin::Pin,
 };
 
-impl<G> GeneratorImpl<G> {
+pin_project_lite::pin_project!(
     #[doc(hidden)]
-    pub unsafe fn new_sync<Y, R>(generator: G) -> impl SyncGenerator<Y, R>
+    pub struct SyncGeneratorImpl<G> {
+        #[pin]
+        generator: G,
+    }
+);
+
+pin_project_lite::pin_project!(
+    #[doc(hidden)]
+    pub struct SyncFallibleGeneratorImpl<G> {
+        #[pin]
+        generator: G,
+    }
+);
+
+impl<G> SyncGeneratorImpl<G> {
+    #[doc(hidden)]
+    pub unsafe fn create<Y>(
+        generator: G,
+    ) -> impl Effective<Item = Y, Produces = Multiple, Failure = Infallible, Async = Blocking>
     where
-        G: Generator<(), Yield = Y, Return = R>,
+        G: Generator<(), Yield = Y, Return = ()>,
     {
         Self { generator }
     }
 }
 
-/// This trait is a combination of [`Iterator`], [`Finally`] and [`Generator`] all in one neat package.
-pub trait SyncGenerator<Y, R>: Iterator<Item = Y> + Finally<Output = R> {
-    /// Same as [`Generator::resume`] but with no argument, to match normal iterators
-    fn resume(self: Pin<&mut Self>) -> GeneratorState<Y, R>;
-
+impl<G> SyncFallibleGeneratorImpl<G> {
     #[doc(hidden)]
-    fn into_sync_generator(self) -> Self
+    pub unsafe fn create<Y, E>(
+        generator: G,
+    ) -> impl Effective<Item = Y, Produces = Multiple, Failure = Failure<E>, Async = Blocking>
     where
-        Self: Sized,
+        G: Generator<(), Yield = Y, Return = Result<(), E>>,
     {
-        self
+        Self { generator }
     }
 }
 
-/// This allows synchronous generators a way to return a value
-/// once the execution is complete.
-pub trait Finally {
-    /// Type to return
-    type Output;
-    /// Consume to get the output.
-    fn finally(self) -> Self::Output;
-}
-
-impl<R, G> Finally for GeneratorImpl<G>
+impl<G> Effective for SyncGeneratorImpl<G>
 where
-    G: Generator<(), Return = R>,
+    G: Generator<(), Return = ()>,
 {
-    type Output = R;
+    type Item = G::Yield;
+    type Failure = Infallible;
+    type Produces = Multiple;
+    type Async = Blocking;
 
-    fn finally(self) -> Self::Output {
-        let mut gen = self.generator;
-        loop {
-            // SAFETY: since gen never moves during the lifetime of this loop
-            // the pin assumptions are never violated during the usage of the generator
-            let gen = unsafe { Pin::new_unchecked(&mut gen) };
-            match gen.resume(()) {
-                GeneratorState::Yielded(_) => (),
-                GeneratorState::Complete(r) => break r,
-            }
+    fn poll_effect(
+        self: Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> EffectiveResult<Self> {
+        match self.project().generator.resume(()) {
+            GeneratorState::Yielded(x) => EffectResult::Item(x),
+            GeneratorState::Complete(()) => EffectResult::Done(Multiple),
         }
     }
 }
 
-impl<Y, G> Iterator for GeneratorImpl<G>
+impl<G, E> Effective for SyncFallibleGeneratorImpl<G>
 where
-    G: Generator<(), Yield = Y>,
+    G: Generator<(), Return = Result<(), E>>,
 {
-    type Item = Y;
+    type Item = G::Yield;
+    type Failure = Failure<E>;
+    type Produces = Multiple;
+    type Async = Blocking;
 
-    fn next(&mut self) -> Option<Self::Item> {
-        // TODO: validate the safety of this...
-        let gen = unsafe { Pin::new_unchecked(&mut self.generator) };
-        match gen.resume(()) {
-            GeneratorState::Yielded(y) => Some(y),
-            GeneratorState::Complete(_) => None,
+    fn poll_effect(
+        self: Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> EffectiveResult<Self> {
+        match self.project().generator.resume(()) {
+            GeneratorState::Yielded(x) => EffectResult::Item(x),
+            GeneratorState::Complete(Err(e)) => EffectResult::Failure(Failure(e)),
+            GeneratorState::Complete(Ok(())) => EffectResult::Done(Multiple),
         }
-    }
-}
-
-impl<Y, R, G> SyncGenerator<Y, R> for GeneratorImpl<G>
-where
-    G: Generator<(), Yield = Y, Return = R>,
-{
-    fn resume(self: Pin<&mut Self>) -> GeneratorState<Y, R> {
-        self.project_generator().resume(())
     }
 }

@@ -1,6 +1,6 @@
 #![feature(drain_filter)]
 
-use parse::{AttrGenerator, ExprGenerator};
+use parse::AttrGenerator;
 use proc_macro::TokenStream as TokenStream1;
 use quote::ToTokens;
 use syn::parse_macro_input;
@@ -11,7 +11,7 @@ macro_rules! new_path {
     };
     ($span:expr => ::$($ident:ident)::*) => {
         ::syn::Path {
-            leading_colon: None,
+            leading_colon: Some(::syn::token::PathSep::default()),
             segments: segments!($span => $($ident)::*)
         }
     };
@@ -20,7 +20,7 @@ macro_rules! new_path {
     };
     ($span:expr => $($ident:ident)::*) => {
         ::syn::Path {
-            leading_colon: Some(::syn::token::Colon2::default()),
+            leading_colon: None,
             segments: segments!($span => $($ident)::*)
         }
     };
@@ -41,12 +41,6 @@ mod break_visit;
 mod gen_visit;
 mod parse;
 mod process;
-
-#[proc_macro]
-pub fn async_generator(input: TokenStream1) -> TokenStream1 {
-    let input = parse_macro_input!(input as ExprGenerator);
-    input.process().into_token_stream().into()
-}
 
 #[proc_macro_attribute]
 pub fn generator(_args: TokenStream1, input: TokenStream1) -> TokenStream1 {
