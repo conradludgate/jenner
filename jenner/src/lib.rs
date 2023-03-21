@@ -5,17 +5,17 @@
 //!
 //! ```rust
 //! // a couple required nightly features
-//! #![feature(generators, generator_trait, never_type, async_iterator)]
+//! #![feature(generators)]
 //!
-//! use jenner::generator;
-//! use std::async_iter::AsyncIterator;
-//! use std::time::{Instant, Duration};
+//! use effective::{Effective, EffectiveExt, Async, Multiple};
+//! use jenner::effect;
+//! use std::{time::{Instant, Duration}, convert::Infallible};
 //!
 //! /// Creates a stream that yields u32s that countdown from 5 to 0.
 //! /// Waiting 0.2s between each (1s total)
-//! #[generator]
-//! #[yields(u32)]
-//! async fn countdown() {
+//! #[effect]
+//! #[yields]
+//! async fn countdown() -> u32 {
 //!     yield 5;
 //!     for i in (0..5).rev() {
 //!         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -25,14 +25,17 @@
 //!
 //! /// Iterates over the provided stream, printing the value and
 //! /// pushing it to a vec that is returned
-//! #[generator]
-//! async fn collect(input: impl AsyncIterator<Item = u32>) -> Vec<u32> {
+//! #[effect]
+//! async fn collect(
+//!     input: impl Effective<Item = u32, Failure = Infallible, Produces = Multiple, Async = Async>,
+//! ) -> Vec<u32> {
 //!     let mut v = vec![];
 //!
+//!     #[effect(async)]
 //!     for i in input {
 //!         println!("{:?}", i);
 //!         v.push(i)
-//!     }.await; // special syntax to consume a stream
+//!     }
 //!
 //!     v
 //! }
@@ -43,7 +46,7 @@
 //!
 //!     // countdown() is a valid stream
 //!     // collect(...) is a valid future
-//!     let v = collect(countdown()).await;
+//!     let v = collect(countdown()).shim().await;
 //!     assert_eq!(v, vec![5, 4, 3, 2, 1, 0]);
 //!
 //!     assert!(start.elapsed() > Duration::from_millis(200 * 5));
@@ -55,11 +58,12 @@
 //! ```rust
 //! #![feature(generators)]
 //!
-//! use jenner::generator;
+//! use effective::EffectiveExt;
+//! use jenner::effect;
 //!
-//! #[generator]
-//! #[yields(usize)]
-//! fn fibonacii() {
+//! #[effect]
+//! #[yields]
+//! fn fibonacii() -> usize {
 //!     use std::mem;
 //!
 //!     let mut a = 0;
@@ -74,7 +78,7 @@
 //!
 //! fn main() {
 //!     // fibonacii() is a valid `Iterator<Item = usize>`
-//!     let v: Vec<_> = fibonacii().take(10).collect();
+//!     let v: Vec<_> = fibonacii().shim().take(10).collect();
 //!     assert_eq!(v, vec![0, 1, 1, 2, 3, 5, 8, 13, 21, 34]);
 //! }
 //! ```
@@ -87,17 +91,17 @@
 ///
 /// ```
 /// // a couple required nightly features
-/// #![feature(generators, generator_trait, never_type, into_future, async_iterator)]
+/// #![feature(generators)]
 ///
-/// use jenner::generator;
-/// use std::async_iter::AsyncIterator;
-/// use std::time::{Instant, Duration};
+/// use effective::{Effective, EffectiveExt, Async, Multiple};
+/// use jenner::effect;
+/// use std::{time::{Instant, Duration}, convert::Infallible};
 ///
 /// /// Creates a stream that yields u32s that countdown from 5 to 0.
 /// /// Waiting 0.2s between each (1s total)
-/// #[generator]
-/// #[yields(u32)]
-/// async fn countdown() {
+/// #[effect]
+/// #[yields]
+/// async fn countdown() -> u32 {
 ///     yield 5;
 ///     for i in (0..5).rev() {
 ///         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -107,14 +111,17 @@
 ///
 /// /// Iterates over the provided stream, printing the value and
 /// /// pushing it to a vec that is returned
-/// #[generator]
-/// async fn collect(input: impl AsyncIterator<Item = u32>) -> Vec<u32> {
+/// #[effect]
+/// async fn collect(
+///     input: impl Effective<Item = u32, Failure = Infallible, Produces = Multiple, Async = Async>,
+/// ) -> Vec<u32> {
 ///     let mut v = vec![];
 ///
+///     #[effect(async)]
 ///     for i in input {
 ///         println!("{:?}", i);
 ///         v.push(i)
-///     }.await; // special syntax to consume a stream
+///     }
 ///
 ///     v
 /// }
@@ -125,7 +132,7 @@
 ///
 ///     // countdown() is a valid stream
 ///     // collect(...) is a valid future
-///     let v = collect(countdown()).await;
+///     let v = collect(countdown()).shim().await;
 ///     assert_eq!(v, vec![5, 4, 3, 2, 1, 0]);
 ///
 ///     assert!(start.elapsed() > Duration::from_millis(200 * 5));
@@ -137,11 +144,12 @@
 /// ```
 /// #![feature(generators)]
 ///
-/// use jenner::generator;
+/// use effective::EffectiveExt;
+/// use jenner::effect;
 ///
-/// #[generator]
-/// #[yields(usize)]
-/// fn fibonacii() {
+/// #[effect]
+/// #[yields]
+/// fn fibonacii() -> usize {
 ///     use std::mem;
 ///
 ///     let mut a = 0;
@@ -155,17 +163,15 @@
 /// }
 ///
 /// fn main() {
-///     // fibonacii() is a valid `Iterator<Item = usize>`
-///     let v: Vec<_> = fibonacii().take(10).collect();
+///     // fibonacii().shim() is a valid `Iterator<Item = usize>`
+///     let v: Vec<_> = fibonacii().shim().take(10).collect();
 ///     assert_eq!(v, vec![0, 1, 1, 2, 3, 5, 8, 13, 21, 34]);
 /// }
 /// ```
-pub use jenner_macro::generator;
+pub use jenner_macro::effect;
 
 mod asynch;
 mod sync;
-
-// pub use sync::Finally;
 
 #[doc(hidden)]
 pub mod __private {

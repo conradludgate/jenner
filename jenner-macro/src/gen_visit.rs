@@ -2,10 +2,15 @@ use proc_macro2::Ident;
 use quote::format_ident;
 use rand::{distributions::Alphanumeric, Rng};
 use syn::{
+    ext::IdentExt,
+    parse::Parser,
     parse_quote,
     punctuated::Punctuated,
-    token,
-    visit_mut::{visit_expr_method_call_mut, visit_expr_mut, visit_expr_yield_mut, VisitMut},
+    token::{self, Comma},
+    visit_mut::{
+        visit_expr_for_loop_mut, visit_expr_method_call_mut, visit_expr_mut, visit_expr_yield_mut,
+        VisitMut,
+    },
     Expr, ExprAssign, ExprAwait, ExprCall, ExprForLoop, ExprMethodCall, ExprPath, ExprTuple,
     ExprYield, Stmt, Type,
 };
@@ -48,25 +53,15 @@ impl GenVisitor {
             },
             (false, true) => parse_quote! {
                 unsafe { ::jenner::__private::AsyncGeneratorImpl::create(
-                    |mut #cx: ::jenner::__private::UnsafeContextRef| { #(#stmts)* }
+                    static |mut #cx: ::jenner::__private::UnsafeContextRef| { #(#stmts)* }
                 ) }
             },
             (false, false) => parse_quote! {
                 unsafe { ::jenner::__private::AsyncImpl::create(
-                    |mut #cx: ::jenner::__private::UnsafeContextRef| { #(#stmts)* }
+                    static |mut #cx: ::jenner::__private::UnsafeContextRef| { #(#stmts)* }
                 ) }
             },
         }
-
-        // if sync {
-        //     parse_quote! {
-        //         unsafe { ::jenner::GeneratorImpl::new_sync::<#y, _>(|| { #(#stmts)* }) }
-        //     }
-        // } else {
-        //     parse_quote! {
-        //         unsafe { ::jenner::GeneratorImpl::new_async::<#y, _>(|mut #cx: ::jenner::__private::UnsafeContextRef| { #(#stmts)* }) }
-        //     }
-        // }
     }
 }
 
@@ -75,12 +70,6 @@ impl VisitMut for GenVisitor {
         match i {
             Expr::Await(await_) if !self.sync => {
                 let ExprAwait { attrs, base, .. } = await_;
-
-                self.visit_expr_mut(&mut *base);
-                if self.handle_for_await(&mut *base) {
-                    *i = parse_quote! { #(#attrs)* { #base } };
-                    return;
-                }
 
                 let cx = &self.cx;
                 *i = parse_quote! {{
@@ -126,6 +115,45 @@ impl VisitMut for GenVisitor {
                     *i = parse_quote! { #(#attrs)* { #receiver } };
                 }
             }
+            Expr::ForLoop(for_loop) => {
+                visit_expr_for_loop_mut(self, for_loop);
+
+                let mut async_ = false;
+                // let mut fallible = false;
+
+                for attr in for_loop.attrs.drain(..) {
+                    if attr.path().is_ident("effect") {
+                        match attr.meta {
+                            syn::Meta::Path(_) => {}
+                            syn::Meta::List(list) => {
+                                fn parser(
+                                    input: syn::parse::ParseStream,
+                                ) -> syn::Result<Punctuated<Ident, Comma>>
+                                {
+                                    Punctuated::<Ident, Comma>::parse_terminated_with(
+                                        input,
+                                        Ident::parse_any,
+                                    )
+                                }
+                                let effects = parser.parse2(list.tokens).unwrap();
+
+                                for effect in effects {
+                                    match effect.to_string().as_str() {
+                                        "async" => async_ = true,
+                                        // "fallible" => fallible = true,
+                                        effect => panic!("unknown effect {effect}"),
+                                    }
+                                }
+                            }
+                            syn::Meta::NameValue(_) => {}
+                        }
+                    }
+                }
+
+                if async_ {
+                    *i = self.async_for_impl(for_loop);
+                }
+            }
             i => visit_expr_mut(self, i),
         }
     }
@@ -158,70 +186,41 @@ impl VisitMut for GenVisitor {
 }
 
 impl GenVisitor {
-    fn handle_for_await(&self, i: &mut Expr) -> bool {
-        if let Expr::ForLoop(for_loop) = i {
-            let ExprForLoop {
-                attrs,
-                label,
-                pat,
-                expr,
-                body,
-                ..
-            } = for_loop;
+    fn async_for_impl(&self, for_loop: &mut ExprForLoop) -> Expr {
+        let ExprForLoop {
+            attrs,
+            label,
+            pat,
+            expr,
+            body,
+            ..
+        } = for_loop;
 
-            let mut vis = BreakVisitor {
-                label: &*label,
-                outside: false,
-                breaks: 0,
-            };
-            vis.visit_block_mut(body);
-            let BreakVisitor { breaks, .. } = vis;
-
-            let break_ty: Type = if breaks == 0 {
-                parse_quote! { ! }
-            } else {
-                parse_quote! { _ }
-            };
-
-            let cx = &self.cx;
-            *i = parse_quote! {
-                #(#attrs)*
-                {
-                    let gen = #expr;
-                    let mut gen = {
-                        // weak form of specialisation.
-                        use ::jenner::{__private::IntoAsyncGenerator, AsyncGenerator};
-                        gen.into_async_generator()
-                    };
-                    let res: ::jenner::ForResult<#break_ty, _> = #label loop {
-                        let next = loop {
-                            let polled = unsafe {
-                                ::jenner::AsyncGenerator::poll_resume(
-                                    ::jenner::__private::pin::Pin::new_unchecked(&mut gen),
-                                    #cx.get_context()
-                                )
-                            };
-                            match polled {
-                                ::jenner::__private::task::Poll::Ready(r) => break r,
-                                ::jenner::__private::task::Poll::Pending => {
-                                    #cx = yield ::jenner::__private::task::Poll::Pending;
-                                }
+        let cx = &self.cx;
+        parse_quote! {
+            #(#attrs)*
+            {
+                let mut __gen__ = ::jenner::__private::pin::pin!(#expr);
+                #label loop {
+                    let __next__ = loop {
+                        let cx = unsafe { #cx.get_context() };
+                        let polled = ::jenner::__private::effective::Effective::poll_effect(__gen__.as_mut(), cx);
+                        match polled {
+                            ::jenner::__private::effective::EffectResult::Done(_) => break None,
+                            ::jenner::__private::effective::EffectResult::Item(x) => break Some(x),
+                            ::jenner::__private::effective::EffectResult::Failure(_) => ::std::unreachable!(),
+                            ::jenner::__private::effective::EffectResult::Pending(_) => {
+                                #cx = yield ::jenner::__private::task::Poll::Pending;
                             }
                         };
-
-                        match next {
-                            ::jenner::__private::GeneratorState::Yielded(#pat) => #body,
-                            ::jenner::__private::GeneratorState::Complete(c) => break ::jenner::ForResult::Complete(c),
-                        };
                     };
-                    res
-                }
-            };
-            true
-        } else {
-            false
+
+                    if let Some(#pat) = __next__ { #body } else { break };
+                };
+            }
         }
     }
+
     fn handle_for_finally(&self, i: &mut Expr) -> bool {
         if let Expr::ForLoop(for_loop) = i {
             let ExprForLoop {

@@ -43,7 +43,7 @@ mod parse;
 mod process;
 
 #[proc_macro_attribute]
-pub fn generator(_args: TokenStream1, input: TokenStream1) -> TokenStream1 {
+pub fn effect(_args: TokenStream1, input: TokenStream1) -> TokenStream1 {
     let input = parse_macro_input!(input as AttrGenerator);
 
     input

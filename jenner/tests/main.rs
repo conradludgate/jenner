@@ -1,22 +1,22 @@
-#![feature(generators, generator_trait, stmt_expr_attributes, async_iterator)]
+#![feature(generators)]
 
-use effective::EffectiveExt;
-use jenner::generator;
+use effective::{Async, Effective, EffectiveExt, Multiple};
+use jenner::effect;
 use std::{
-    async_iter::AsyncIterator,
+    convert::Infallible,
     time::{Duration, Instant},
 };
 
-// #[tokio::test]
-// async fn streams() {
-//     let start = Instant::now();
-//     let v = collect(double(countdown())).await;
-//     assert_eq!(v, vec![10, 8, 6, 4, 2, 0]);
-//     // expected to take around a second;
-//     assert!(start.elapsed() > Duration::from_millis(200 * 5));
-// }
+#[tokio::test]
+async fn streams() {
+    let start = Instant::now();
+    let v = collect(double(countdown())).shim().await;
+    assert_eq!(v, vec![10, 8, 6, 4, 2, 0]);
+    // expected to take around a second;
+    assert!(start.elapsed() > Duration::from_millis(200 * 5));
+}
 
-#[generator]
+#[effect]
 #[yields]
 async fn countdown() -> u32 {
     yield 5;
@@ -27,25 +27,29 @@ async fn countdown() -> u32 {
     }
 }
 
-// #[generator]
-// #[yields]
-// async fn double(input: impl AsyncIterator<Item = u32>) -> u32 {
-//     for i in input {
-//         yield i * 2;
-//     }
-//     .await;
-// }
+#[effect]
+#[yields]
+async fn double(
+    input: impl Effective<Item = u32, Failure = Infallible, Produces = Multiple, Async = Async>,
+) -> u32 {
+    #[effect(async)]
+    for i in input {
+        yield i * 2;
+    }
+}
 
-// #[generator]
-// async fn collect<T: std::fmt::Debug>(input: impl AsyncIterator<Item = T>) -> Vec<T> {
-//     let mut v = vec![];
-//     for i in input {
-//         println!("got {:?}", i);
-//         v.push(i)
-//     }
-//     .await;
-//     v
-// }
+#[effect]
+async fn collect<T: std::fmt::Debug>(
+    input: impl Effective<Item = T, Failure = Infallible, Produces = Multiple, Async = Async>,
+) -> Vec<T> {
+    let mut v = vec![];
+    #[effect(async)]
+    for i in input {
+        println!("got {:?}", i);
+        v.push(i)
+    }
+    v
+}
 
 #[test]
 fn iterators() {
@@ -53,7 +57,7 @@ fn iterators() {
     assert_eq!(v, vec![0, 1, 1, 2, 3, 5, 8, 13, 21, 34]);
 }
 
-#[generator]
+#[effect]
 #[yields]
 fn fibonacii() -> usize {
     let mut a = 0;
@@ -66,25 +70,25 @@ fn fibonacii() -> usize {
     }
 }
 
-// #[tokio::test]
-// async fn complete() {
-//     let start = Instant::now();
-//     let v = print(countdown1()).await;
-//     assert_eq!(v, "done");
-//     // expected to take around a second;
-//     assert!(start.elapsed() > Duration::from_millis(200 * 5));
-// }
+#[tokio::test]
+async fn complete() {
+    let start = Instant::now();
+    print(countdown1()).shim().await;
+    // expected to take around a second;
+    assert!(start.elapsed() > Duration::from_millis(200 * 5));
+}
 
-// #[generator]
-// async fn print(gen: impl AsyncGenerator<u32, &'static str>) -> &'static str {
-//     for i in gen {
-//         println!("got {:?}", i);
-//     }
-//     .await
-//     .complete() // can be called since the loop has no breaks
-// }
+#[effect]
+async fn print(
+    input: impl Effective<Item = u32, Failure = Infallible, Produces = Multiple, Async = Async>,
+) {
+    #[effect(async)]
+    for i in input {
+        println!("got {:?}", i);
+    }
+}
 
-#[generator]
+#[effect]
 #[yields]
 async fn countdown1() -> u32 {
     yield 5;
