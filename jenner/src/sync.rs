@@ -24,7 +24,7 @@ pin_project_lite::pin_project!(
 
 impl<G> SyncGeneratorImpl<G> {
     #[doc(hidden)]
-    pub unsafe fn create<Y>(
+    pub fn create<Y>(
         generator: G,
     ) -> impl Effective<Item = Y, Produces = Multiple, Failure = Infallible, Async = Blocking>
     where
@@ -36,7 +36,7 @@ impl<G> SyncGeneratorImpl<G> {
 
 impl<G> SyncFallibleGeneratorImpl<G> {
     #[doc(hidden)]
-    pub unsafe fn create<Y, E>(
+    pub fn create<Y, E>(
         generator: G,
     ) -> impl Effective<Item = Y, Produces = Multiple, Failure = Failure<E>, Async = Blocking>
     where

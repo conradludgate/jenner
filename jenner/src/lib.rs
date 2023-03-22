@@ -4,21 +4,21 @@
 //! # Asynchronous example
 //!
 //! ```rust
-//! // a couple required nightly features
+//! // add the required nightly feature
 //! #![feature(generators)]
 //!
 //! use effective::{Effective, EffectiveExt, Async, Multiple};
+//! use effective::wrappers::future;
 //! use jenner::effect;
 //! use std::{time::{Instant, Duration}, convert::Infallible};
 //!
 //! /// Creates a stream that yields u32s that countdown from 5 to 0.
 //! /// Waiting 0.2s between each (1s total)
-//! #[effect]
-//! #[yields]
+//! #[effect(yields)]
 //! async fn countdown() -> u32 {
 //!     yield 5;
 //!     for i in (0..5).rev() {
-//!         tokio::time::sleep(Duration::from_millis(200)).await;
+//!         future(tokio::time::sleep(Duration::from_millis(200))).await;
 //!         yield i;
 //!     }
 //! }
@@ -60,9 +60,9 @@
 //!
 //! use effective::EffectiveExt;
 //! use jenner::effect;
+//! use std::pin::pin;
 //!
-//! #[effect]
-//! #[yields]
+//! #[effect(yields)]
 //! fn fibonacii() -> usize {
 //!     use std::mem;
 //!
@@ -78,33 +78,34 @@
 //!
 //! fn main() {
 //!     // fibonacii() is a valid `Iterator<Item = usize>`
-//!     let v: Vec<_> = fibonacii().shim().take(10).collect();
+//!     let v: Vec<_> = pin!(fibonacii()).shim().take(10).collect();
 //!     assert_eq!(v, vec![0, 1, 1, 2, 3, 5, 8, 13, 21, 34]);
 //! }
 //! ```
 #![feature(generator_trait)]
 
+pub use effective;
 /// Apply to a function to convert it into an iterator, allowing the use of the `yield` keyword.
 /// Iterators can be synchronous or asynchronous.
 ///
 /// # Asynchronous example
 ///
 /// ```
-/// // a couple required nightly features
+/// // add the required nightly feature
 /// #![feature(generators)]
 ///
 /// use effective::{Effective, EffectiveExt, Async, Multiple};
+/// use effective::wrappers::future;
 /// use jenner::effect;
 /// use std::{time::{Instant, Duration}, convert::Infallible};
 ///
 /// /// Creates a stream that yields u32s that countdown from 5 to 0.
 /// /// Waiting 0.2s between each (1s total)
-/// #[effect]
-/// #[yields]
+/// #[effect(yields)]
 /// async fn countdown() -> u32 {
 ///     yield 5;
 ///     for i in (0..5).rev() {
-///         tokio::time::sleep(Duration::from_millis(200)).await;
+///         future(tokio::time::sleep(Duration::from_millis(200))).await;
 ///         yield i;
 ///     }
 /// }
@@ -146,9 +147,9 @@
 ///
 /// use effective::EffectiveExt;
 /// use jenner::effect;
+/// use std::pin::pin;
 ///
-/// #[effect]
-/// #[yields]
+/// #[effect(yields)]
 /// fn fibonacii() -> usize {
 ///     use std::mem;
 ///
@@ -164,7 +165,7 @@
 ///
 /// fn main() {
 ///     // fibonacii().shim() is a valid `Iterator<Item = usize>`
-///     let v: Vec<_> = fibonacii().shim().take(10).collect();
+///     let v: Vec<_> = pin!(fibonacii()).shim().take(10).collect();
 ///     assert_eq!(v, vec![0, 1, 1, 2, 3, 5, 8, 13, 21, 34]);
 /// }
 /// ```
@@ -175,10 +176,11 @@ mod sync;
 
 #[doc(hidden)]
 pub mod __private {
-    pub use crate::asynch::UnsafeContextRef;
-    pub use crate::asynch::{AsyncFallibleGeneratorImpl, AsyncGeneratorImpl, AsyncImpl};
+    pub use crate::asynch::{
+        AsyncFallibleGeneratorImpl, AsyncFallibleImpl, AsyncGeneratorImpl, AsyncImpl,
+        UnsafeContextRef,
+    };
     pub use crate::sync::{SyncFallibleGeneratorImpl, SyncGeneratorImpl};
-    pub use effective;
-    pub use std::future::{Future, IntoFuture};
-    pub use std::{ops::GeneratorState, pin, task};
+    // pub use std::future::{Future, IntoFuture};
+    pub use std::{pin, task};
 }

@@ -32,6 +32,14 @@ pin_project_lite::pin_project!(
     }
 );
 
+pin_project_lite::pin_project!(
+    #[doc(hidden)]
+    pub struct AsyncFallibleImpl<G> {
+        #[pin]
+        generator: G,
+    }
+);
+
 #[doc(hidden)]
 pub struct UnsafeContextRef(NonNull<Context<'static>>);
 
@@ -52,7 +60,7 @@ unsafe impl Send for UnsafeContextRef {}
 
 impl<G> AsyncGeneratorImpl<G> {
     #[doc(hidden)]
-    pub unsafe fn create<Y>(
+    pub fn create<Y>(
         generator: G,
     ) -> impl Effective<Item = Y, Produces = Multiple, Failure = Infallible, Async = Async>
     where
@@ -64,7 +72,7 @@ impl<G> AsyncGeneratorImpl<G> {
 
 impl<G> AsyncFallibleGeneratorImpl<G> {
     #[doc(hidden)]
-    pub unsafe fn create<Y, E>(
+    pub fn create<Y, E>(
         generator: G,
     ) -> impl Effective<Item = Y, Produces = Multiple, Failure = Failure<E>, Async = Async>
     where
@@ -76,11 +84,23 @@ impl<G> AsyncFallibleGeneratorImpl<G> {
 
 impl<G> AsyncImpl<G> {
     #[doc(hidden)]
-    pub unsafe fn create<Y>(
+    pub fn create<Y>(
         generator: G,
     ) -> impl Effective<Item = Y, Produces = Single, Failure = Infallible, Async = Async>
     where
         G: Generator<UnsafeContextRef, Yield = Poll<Infallible>, Return = Y>,
+    {
+        Self { generator }
+    }
+}
+
+impl<G> AsyncFallibleImpl<G> {
+    #[doc(hidden)]
+    pub fn create<Y, E>(
+        generator: G,
+    ) -> impl Effective<Item = Y, Produces = Single, Failure = Failure<E>, Async = Async>
+    where
+        G: Generator<UnsafeContextRef, Yield = Poll<Infallible>, Return = Result<Y, E>>,
     {
         Self { generator }
     }
@@ -137,6 +157,25 @@ where
             GeneratorState::Yielded(Poll::Ready(_)) => unreachable!(),
             GeneratorState::Yielded(Poll::Pending) => EffectResult::Pending(Async),
             GeneratorState::Complete(x) => EffectResult::Item(x),
+        }
+    }
+}
+
+impl<Y, E, G> Effective for AsyncFallibleImpl<G>
+where
+    G: Generator<UnsafeContextRef, Yield = Poll<Infallible>, Return = Result<Y, E>>,
+{
+    type Item = Y;
+    type Failure = Failure<E>;
+    type Produces = Single;
+    type Async = Async;
+
+    fn poll_effect(self: Pin<&mut Self>, cx: &mut Context<'_>) -> EffectiveResult<Self> {
+        match self.project().generator.resume(cx.into()) {
+            GeneratorState::Yielded(Poll::Ready(_)) => unreachable!(),
+            GeneratorState::Yielded(Poll::Pending) => EffectResult::Pending(Async),
+            GeneratorState::Complete(Ok(x)) => EffectResult::Item(x),
+            GeneratorState::Complete(Err(x)) => EffectResult::Failure(Failure(x)),
         }
     }
 }

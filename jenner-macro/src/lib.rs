@@ -2,8 +2,11 @@
 
 use parse::AttrGenerator;
 use proc_macro::TokenStream as TokenStream1;
+use proc_macro2::Ident;
 use quote::ToTokens;
-use syn::parse_macro_input;
+use syn::{
+    ext::IdentExt, parse::Parser, parse_macro_input, punctuated::Punctuated, token::Comma, Error,
+};
 
 macro_rules! new_path {
     (::$($ident:ident)::*) => {
@@ -43,8 +46,27 @@ mod parse;
 mod process;
 
 #[proc_macro_attribute]
-pub fn effect(_args: TokenStream1, input: TokenStream1) -> TokenStream1 {
-    let input = parse_macro_input!(input as AttrGenerator);
+pub fn effect(args: TokenStream1, input: TokenStream1) -> TokenStream1 {
+    let mut input = parse_macro_input!(input as AttrGenerator);
+
+    fn parser(input: syn::parse::ParseStream) -> syn::Result<Punctuated<Ident, Comma>> {
+        Punctuated::<Ident, Comma>::parse_terminated_with(input, Ident::parse_any)
+    }
+    let effects = match parser.parse(args) {
+        Ok(x) => x,
+        Err(e) => return e.to_compile_error().into(),
+    };
+    for effect in effects {
+        match effect.to_string().as_str() {
+            "fallible" => input.fallible = true,
+            "yields" => input.yields = true,
+            _other => {
+                return Error::new(effect.span(), "unknown effect")
+                    .into_compile_error()
+                    .into()
+            }
+        }
+    }
 
     input
         .process()

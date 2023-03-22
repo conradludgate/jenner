@@ -11,8 +11,8 @@ use syn::{
         visit_expr_for_loop_mut, visit_expr_method_call_mut, visit_expr_mut, visit_expr_yield_mut,
         VisitMut,
     },
-    Expr, ExprAssign, ExprAwait, ExprCall, ExprForLoop, ExprMethodCall, ExprPath, ExprTuple,
-    ExprYield, Stmt, Type,
+    Expr, ExprAssign, ExprAwait, ExprCall, ExprForLoop, ExprMethodCall, ExprPath, ExprTry,
+    ExprTuple, ExprYield, Stmt, Type,
 };
 
 use crate::break_visit::BreakVisitor;
@@ -21,10 +21,11 @@ pub struct GenVisitor {
     pub cx: Ident,
     pub sync: bool,
     pub yields: bool,
+    pub fallible: bool,
 }
 
 impl GenVisitor {
-    pub fn new(sync: bool, yields: bool) -> Self {
+    pub fn new(sync: bool, yields: bool, fallible: bool) -> Self {
         let random: String = rand::thread_rng()
             .sample_iter(&Alphanumeric)
             .take(7)
@@ -34,6 +35,7 @@ impl GenVisitor {
             cx: format_ident!("__cx_{}", random),
             sync,
             yields,
+            fallible,
         }
     }
 
@@ -42,24 +44,45 @@ impl GenVisitor {
             stmts.iter_mut().for_each(|stmt| self.visit_stmt_mut(stmt));
         }
 
-        let Self { cx, yields, sync } = self;
+        let Self {
+            cx,
+            yields,
+            sync,
+            fallible,
+        } = self;
 
-        match (sync, yields) {
-            (true, true) => parse_quote! {
-                unsafe { ::jenner::__private::SyncGeneratorImpl::create(|| { #(#stmts)* }) }
+        match (sync, yields, fallible) {
+            (true, true, false) => parse_quote! {
+                ::jenner::__private::SyncGeneratorImpl::create(static || { #(#stmts)* })
             },
-            (true, false) => parse_quote! {
-                unsafe { ::jenner::__private::effective::wrappers::from_fn_once(|| { #(#stmts)* }) }
+            (true, false, false) => parse_quote! {
+                ::jenner::effective::wrappers::from_fn_once(|| { #(#stmts)* })
             },
-            (false, true) => parse_quote! {
-                unsafe { ::jenner::__private::AsyncGeneratorImpl::create(
+            (false, true, false) => parse_quote! {
+                ::jenner::__private::AsyncGeneratorImpl::create(
                     static |mut #cx: ::jenner::__private::UnsafeContextRef| { #(#stmts)* }
-                ) }
+                )
             },
-            (false, false) => parse_quote! {
-                unsafe { ::jenner::__private::AsyncImpl::create(
+            (false, false, false) => parse_quote! {
+                ::jenner::__private::AsyncImpl::create(
                     static |mut #cx: ::jenner::__private::UnsafeContextRef| { #(#stmts)* }
-                ) }
+                )
+            },
+            (true, true, true) => parse_quote! {
+                ::jenner::__private::SyncFallibleGeneratorImpl::create(static || Ok({ #(#stmts)* }))
+            },
+            (true, false, true) => parse_quote! {
+                ::jenner::effective::wrappers::fallible((|| Ok({ #(#stmts)* }))())
+            },
+            (false, true, true) => parse_quote! {
+                ::jenner::__private::AsyncFallibleGeneratorImpl::create(
+                    static |mut #cx: ::jenner::__private::UnsafeContextRef| Ok({ #(#stmts)* })
+                )
+            },
+            (false, false, true) => parse_quote! {
+                ::jenner::__private::AsyncFallibleImpl::create(
+                    static |mut #cx: ::jenner::__private::UnsafeContextRef| Ok({ #(#stmts)* })
+                )
             },
         }
     }
@@ -69,20 +92,19 @@ impl VisitMut for GenVisitor {
     fn visit_expr_mut(&mut self, i: &mut syn::Expr) {
         match i {
             Expr::Await(await_) if !self.sync => {
-                let ExprAwait { attrs, base, .. } = await_;
+                let ExprAwait { base, .. } = await_;
 
                 let cx = &self.cx;
                 *i = parse_quote! {{
-                    let fut = #(#attrs)* { #base };
-                    let mut fut = ::jenner::__private::IntoFuture::into_future(fut);
-
+                    let mut __fut__ = ::jenner::__private::pin::pin!(#base);
                     loop {
-                        let fut = unsafe { ::jenner::__private::pin::Pin::new_unchecked(&mut fut) };
                         let cx = unsafe { #cx.get_context() };
-                        let polled = ::jenner::__private::Future::poll(fut, cx);
+                        let polled = ::jenner::effective::Effective::poll_effect(__fut__.as_mut(), cx);
                         match polled {
-                            ::jenner::__private::task::Poll::Ready(r) => break r,
-                            ::jenner::__private::task::Poll::Pending => {
+                            ::jenner::effective::EffectResult::Done(_) => ::core::unreachable!(),
+                            ::jenner::effective::EffectResult::Item(x) => break x,
+                            ::jenner::effective::EffectResult::Failure(_) => ::core::unreachable!(),
+                            ::jenner::effective::EffectResult::Pending(_) => {
                                 #cx = yield ::jenner::__private::task::Poll::Pending;
                             }
                         }
@@ -105,6 +127,15 @@ impl VisitMut for GenVisitor {
                     right: Box::new(yield_.clone().into()),
                 }
                 .into();
+            }
+            Expr::Try(try_) => {
+                let ExprTry { expr, .. } = try_;
+                *i = parse_quote!(
+                    match ::jenner::effective::SimpleTry::branch(#expr) {
+                        ::core::ops::ControlFlow::Continue(x) => x,
+                        ::core::ops::ControlFlow::Break(x) => return Err(x),
+                    }
+                );
             }
             Expr::MethodCall(m) if m.method == "finally" => {
                 visit_expr_method_call_mut(self, m);
@@ -204,12 +235,12 @@ impl GenVisitor {
                 #label loop {
                     let __next__ = loop {
                         let cx = unsafe { #cx.get_context() };
-                        let polled = ::jenner::__private::effective::Effective::poll_effect(__gen__.as_mut(), cx);
+                        let polled = ::jenner::effective::Effective::poll_effect(__gen__.as_mut(), cx);
                         match polled {
-                            ::jenner::__private::effective::EffectResult::Done(_) => break None,
-                            ::jenner::__private::effective::EffectResult::Item(x) => break Some(x),
-                            ::jenner::__private::effective::EffectResult::Failure(_) => ::std::unreachable!(),
-                            ::jenner::__private::effective::EffectResult::Pending(_) => {
+                            ::jenner::effective::EffectResult::Done(_) => break None,
+                            ::jenner::effective::EffectResult::Item(x) => break Some(x),
+                            ::jenner::effective::EffectResult::Failure(_) => ::core::unreachable!(),
+                            ::jenner::effective::EffectResult::Pending(_) => {
                                 #cx = yield ::jenner::__private::task::Poll::Pending;
                             }
                         };

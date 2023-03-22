@@ -1,9 +1,10 @@
 #![feature(generators)]
 
-use effective::{Async, Effective, EffectiveExt, Multiple};
+use effective::{wrappers::future, Async, Effective, EffectiveExt, Multiple};
 use jenner::effect;
 use std::{
     convert::Infallible,
+    pin::pin,
     time::{Duration, Instant},
 };
 
@@ -16,19 +17,17 @@ async fn streams() {
     assert!(start.elapsed() > Duration::from_millis(200 * 5));
 }
 
-#[effect]
-#[yields]
+#[effect(yields)]
 async fn countdown() -> u32 {
     yield 5;
 
     for i in (0..5).rev() {
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        future(tokio::time::sleep(Duration::from_millis(200))).await;
         yield i;
     }
 }
 
-#[effect]
-#[yields]
+#[effect(yields)]
 async fn double(
     input: impl Effective<Item = u32, Failure = Infallible, Produces = Multiple, Async = Async>,
 ) -> u32 {
@@ -53,12 +52,11 @@ async fn collect<T: std::fmt::Debug>(
 
 #[test]
 fn iterators() {
-    let v: Vec<_> = fibonacii().shim().take(10).collect();
+    let v: Vec<_> = pin!(fibonacii()).shim().take(10).collect();
     assert_eq!(v, vec![0, 1, 1, 2, 3, 5, 8, 13, 21, 34]);
 }
 
-#[effect]
-#[yields]
+#[effect(yields)]
 fn fibonacii() -> usize {
     let mut a = 0;
     let mut b = 1;
@@ -88,12 +86,11 @@ async fn print(
     }
 }
 
-#[effect]
-#[yields]
+#[effect(yields)]
 async fn countdown1() -> u32 {
     yield 5;
     for i in (0..5).rev() {
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        future(tokio::time::sleep(Duration::from_millis(200))).await;
         yield i;
     }
 }
