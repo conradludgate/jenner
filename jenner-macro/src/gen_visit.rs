@@ -56,7 +56,7 @@ impl GenVisitor {
                 ::jenner::__private::SyncGeneratorImpl::create(#[coroutine] static move || { #(#stmts)* })
             },
             (true, false, false) => parse_quote! {
-                ::jenner::effective::wrappers::from_fn_once(|| { #(#stmts)* })
+                ::jenner::effective::wrappers::from_fn_once(move || { #(#stmts)* })
             },
             (false, true, false) => parse_quote! {
                 ::jenner::__private::AsyncGeneratorImpl::create(
