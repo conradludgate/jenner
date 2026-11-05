@@ -1,5 +1,3 @@
-#![feature(drain_filter)]
-
 use parse::AttrGenerator;
 use proc_macro::TokenStream as TokenStream1;
 use proc_macro2::Ident;

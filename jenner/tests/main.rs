@@ -1,4 +1,4 @@
-#![feature(generators)]
+#![feature(coroutines)]
 
 use effective::{wrappers::future, Async, Effective, EffectiveExt, Multiple};
 use jenner::effect;
@@ -52,7 +52,13 @@ async fn collect<T: std::fmt::Debug>(
 
 #[test]
 fn iterators() {
-    let v: Vec<_> = pin!(fibonacii()).shim().take(10).collect();
+    let mut generator = pin!(fibonacii());
+    let v: Vec<_> = effective::wrappers::from_fn(|cx: &mut std::task::Context<'_>| {
+        generator.as_mut().poll_effect(cx)
+    })
+    .shim()
+    .take(10)
+    .collect();
     assert_eq!(v, vec![0, 1, 1, 2, 3, 5, 8, 13, 21, 34]);
 }
 

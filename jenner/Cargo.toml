@@ -10,7 +10,7 @@ repository = "https://github.com/conradludgate/jenner"
 
 [dependencies]
 jenner-macro = { version = "=0.2.0", path = "../jenner-macro" }
-effective = { path = "../../effective" }
+effective = "0.3.1"
 pin-project-lite = "0.2"
 
 [dev-dependencies]

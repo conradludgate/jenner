@@ -17,7 +17,7 @@ impl<'f> VisitMut for BreakVisitor<'f> {
             || i.label
                 .as_ref()
                 .zip(self.label.as_ref())
-                .map_or(false, |(a, b)| *a == b.name)
+                .is_some_and(|(a, b)| *a == b.name)
         // or breaking the specific label
         {
             self.breaks += 1;

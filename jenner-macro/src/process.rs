@@ -68,7 +68,7 @@ impl AttrGenerator {
 }
 
 fn create_fallible_path(return_ty: &Type) -> Path {
-    let simple_try = new_path!(::jenner::effective::SimpleTry::Break);
+    let simple_try = new_path!(::jenner::effective::Fallible::Break);
     let failure = TypePath {
         qself: Some(syn::QSelf {
             lt_token: Default::default(),
@@ -93,7 +93,7 @@ fn create_fallible_path(return_ty: &Type) -> Path {
 }
 
 fn create_fallible_return_type(return_ty: Type) -> Type {
-    let simple_try = new_path!(::jenner::effective::SimpleTry::Continue);
+    let simple_try = new_path!(::jenner::effective::Fallible::Continue);
     let failure = TypePath {
         qself: Some(syn::QSelf {
             lt_token: Default::default(),

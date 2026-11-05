@@ -1,11 +1,11 @@
-//! A set of traits and proc-macros involved in making and using generators
-//! to create [`AsyncIterator`](std::async_iter::AsyncIterator)s, [`Future`](std::future::Future)s and [`Iterator`]s
+//! Coroutine macros that produce [`effective::Effective`] values, with adapters
+//! for futures, streams and iterators.
 //!
 //! # Asynchronous example
 //!
 //! ```rust
 //! // add the required nightly feature
-//! #![feature(generators)]
+//! #![feature(coroutines)]
 //!
 //! use effective::{Effective, EffectiveExt, Async, Multiple};
 //! use effective::wrappers::future;
@@ -56,9 +56,9 @@
 //! # Synchronous example
 //!
 //! ```rust
-//! #![feature(generators)]
+//! #![feature(coroutines)]
 //!
-//! use effective::EffectiveExt;
+//! use effective::{Effective, EffectiveExt};
 //! use jenner::effect;
 //! use std::pin::pin;
 //!
@@ -78,11 +78,13 @@
 //!
 //! fn main() {
 //!     // fibonacii() is a valid `Iterator<Item = usize>`
-//!     let v: Vec<_> = pin!(fibonacii()).shim().take(10).collect();
+//!     let mut generator = pin!(fibonacii());
+//! let v: Vec<_> = effective::wrappers::from_fn(|cx: &mut std::task::Context<'_>| generator.as_mut().poll_effect(cx))
+//! .shim().take(10).collect();
 //!     assert_eq!(v, vec![0, 1, 1, 2, 3, 5, 8, 13, 21, 34]);
 //! }
 //! ```
-#![feature(generator_trait)]
+#![feature(coroutine_trait)]
 
 pub use effective;
 /// Apply to a function to convert it into an iterator, allowing the use of the `yield` keyword.
@@ -92,7 +94,7 @@ pub use effective;
 ///
 /// ```
 /// // add the required nightly feature
-/// #![feature(generators)]
+/// #![feature(coroutines)]
 ///
 /// use effective::{Effective, EffectiveExt, Async, Multiple};
 /// use effective::wrappers::future;
@@ -143,9 +145,9 @@ pub use effective;
 /// # Synchronous example ([`Iterator`])
 ///
 /// ```
-/// #![feature(generators)]
+/// #![feature(coroutines)]
 ///
-/// use effective::EffectiveExt;
+/// use effective::{Effective, EffectiveExt};
 /// use jenner::effect;
 /// use std::pin::pin;
 ///
@@ -165,7 +167,9 @@ pub use effective;
 ///
 /// fn main() {
 ///     // fibonacii().shim() is a valid `Iterator<Item = usize>`
-///     let v: Vec<_> = pin!(fibonacii()).shim().take(10).collect();
+///     let mut generator = pin!(fibonacii());
+/// let v: Vec<_> = effective::wrappers::from_fn(|cx: &mut std::task::Context<'_>| generator.as_mut().poll_effect(cx))
+/// .shim().take(10).collect();
 ///     assert_eq!(v, vec![0, 1, 1, 2, 3, 5, 8, 13, 21, 34]);
 /// }
 /// ```
