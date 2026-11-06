@@ -1,4 +1,4 @@
-#![feature(coroutines)]
+#![feature(coroutines, coroutine_trait)]
 
 use std::{
     cell::Cell,
@@ -12,10 +12,7 @@ use std::{
     task::{Context, Poll, Wake, Waker},
 };
 
-use jenner::{
-    effect,
-    effective::{wrappers::future, EffectResult, Effective},
-};
+use jenner::{effect, AsyncGenerator, Coroutine, CoroutineState};
 
 #[derive(Default)]
 struct Wakes(AtomicUsize);
@@ -72,13 +69,13 @@ impl Drop for PinnedFuture {
 
 #[effect]
 async fn await_pinned(drops: Arc<AtomicUsize>) -> u32 {
-    future(PinnedFuture::new(drops)).await
+    PinnedFuture::new(drops).await
 }
 
 #[effect(yields)]
 async fn yield_and_await(drops: Arc<AtomicUsize>) -> u32 {
     yield 1;
-    let value = future(PinnedFuture::new(drops)).await;
+    let value = PinnedFuture::new(drops).await;
     yield value;
 }
 
@@ -94,27 +91,26 @@ fn borrowing_generator() -> u32 {
 #[test]
 fn a_synchronous_generator_can_borrow_across_yields() {
     let mut effect = pin!(borrowing_generator());
-    let mut cx = Context::from_waker(Waker::noop());
     assert!(matches!(
-        effect.as_mut().poll_effect(&mut cx),
-        EffectResult::Item(3)
+        effect.as_mut().resume(()),
+        CoroutineState::Yielded(3)
     ));
     assert!(matches!(
-        effect.as_mut().poll_effect(&mut cx),
-        EffectResult::Item(4)
+        effect.as_mut().resume(()),
+        CoroutineState::Yielded(4)
     ));
     assert!(matches!(
-        effect.as_mut().poll_effect(&mut cx),
-        EffectResult::Done(_)
+        effect.as_mut().resume(()),
+        CoroutineState::Complete(())
     ));
 }
 
 #[effect]
 async fn panic_in_poll(drops: Arc<AtomicUsize>) {
-    future(async move {
+    async move {
         let _guard = PinnedFuture::new(drops);
         panic!("child poll panicked");
-    })
+    }
     .await
 }
 
@@ -125,7 +121,7 @@ fn panic_during_poll_drops_locals_once() {
         let mut effect = pin!(panic_in_poll(drops.clone()));
         let mut cx = Context::from_waker(Waker::noop());
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            effect.as_mut().poll_effect(&mut cx)
+            effect.as_mut().poll(&mut cx)
         }));
         assert!(result.is_err());
     }
@@ -140,19 +136,13 @@ fn pending_uses_the_context_from_each_poll() {
     {
         let waker = Waker::from(first.clone());
         let mut cx = Context::from_waker(&waker);
-        assert!(matches!(
-            effect.as_mut().poll_effect(&mut cx),
-            EffectResult::Pending(_)
-        ));
+        assert!(matches!(effect.as_mut().poll(&mut cx), Poll::Pending));
     }
     let second = Arc::new(Wakes::default());
     {
         let waker = Waker::from(second.clone());
         let mut cx = Context::from_waker(&waker);
-        assert!(matches!(
-            effect.as_mut().poll_effect(&mut cx),
-            EffectResult::Item(7)
-        ));
+        assert!(matches!(effect.as_mut().poll(&mut cx), Poll::Ready(7)));
     }
     assert_eq!(first.0.load(Ordering::Relaxed), 1);
     assert_eq!(second.0.load(Ordering::Relaxed), 1);
@@ -165,10 +155,7 @@ fn cancelling_a_pending_effect_drops_its_pinned_future_once() {
     {
         let mut effect = pin!(await_pinned(drops.clone()));
         let mut cx = Context::from_waker(Waker::noop());
-        assert!(matches!(
-            effect.as_mut().poll_effect(&mut cx),
-            EffectResult::Pending(_)
-        ));
+        assert!(matches!(effect.as_mut().poll(&mut cx), Poll::Pending));
         assert_eq!(drops.load(Ordering::Relaxed), 0);
     }
     assert_eq!(drops.load(Ordering::Relaxed), 1);
@@ -181,24 +168,24 @@ fn yielding_refreshes_the_context_before_the_next_await() {
     {
         let mut cx = Context::from_waker(Waker::noop());
         assert!(matches!(
-            effect.as_mut().poll_effect(&mut cx),
-            EffectResult::Item(1)
+            effect.as_mut().poll_resume(&mut cx),
+            Poll::Ready(CoroutineState::Yielded(1))
         ));
     }
     let wakes = Arc::new(Wakes::default());
     let waker = Waker::from(wakes.clone());
     let mut cx = Context::from_waker(&waker);
     assert!(matches!(
-        effect.as_mut().poll_effect(&mut cx),
-        EffectResult::Pending(_)
+        effect.as_mut().poll_resume(&mut cx),
+        Poll::Pending
     ));
     assert!(matches!(
-        effect.as_mut().poll_effect(&mut cx),
-        EffectResult::Item(7)
+        effect.as_mut().poll_resume(&mut cx),
+        Poll::Ready(CoroutineState::Yielded(7))
     ));
     assert!(matches!(
-        effect.as_mut().poll_effect(&mut cx),
-        EffectResult::Done(_)
+        effect.as_mut().poll_resume(&mut cx),
+        Poll::Ready(CoroutineState::Complete(()))
     ));
     assert_eq!(wakes.0.load(Ordering::Relaxed), 2);
     assert_eq!(drops.load(Ordering::Relaxed), 1);
@@ -210,19 +197,59 @@ fn a_pending_effect_can_move_to_another_thread() {
     let mut effect = Box::pin(await_pinned(drops.clone()));
     {
         let mut cx = Context::from_waker(Waker::noop());
-        assert!(matches!(
-            effect.as_mut().poll_effect(&mut cx),
-            EffectResult::Pending(_)
-        ));
+        assert!(matches!(effect.as_mut().poll(&mut cx), Poll::Pending));
     }
     std::thread::spawn(move || {
         let mut cx = Context::from_waker(Waker::noop());
-        assert!(matches!(
-            effect.as_mut().poll_effect(&mut cx),
-            EffectResult::Item(7)
-        ));
+        assert!(matches!(effect.as_mut().poll(&mut cx), Poll::Ready(7)));
     })
     .join()
     .unwrap();
+    assert_eq!(drops.load(Ordering::Relaxed), 1);
+}
+
+#[effect(yields, fallible)]
+async fn fallible_wait(drops: Arc<AtomicUsize>) -> Result<u32, &'static str> {
+    yield PinnedFuture::new(drops).await;
+    Err("stop")?;
+}
+
+#[test]
+fn a_fallible_stream_refreshes_the_context_after_pending() {
+    use jenner::Stream;
+    let drops = Arc::new(AtomicUsize::new(0));
+    let mut stream = pin!(fallible_wait(drops.clone()));
+    let first = Arc::new(Wakes::default());
+    {
+        let waker = Waker::from(first.clone());
+        let mut cx = Context::from_waker(&waker);
+        assert_eq!(stream.as_mut().poll_next(&mut cx), Poll::Pending);
+    }
+    let second = Arc::new(Wakes::default());
+    {
+        let waker = Waker::from(second.clone());
+        let mut cx = Context::from_waker(&waker);
+        assert_eq!(stream.as_mut().poll_next(&mut cx), Poll::Ready(Some(Ok(7))));
+        assert_eq!(
+            stream.as_mut().poll_next(&mut cx),
+            Poll::Ready(Some(Err("stop")))
+        );
+        assert_eq!(stream.as_mut().poll_next(&mut cx), Poll::Ready(None));
+    }
+    assert_eq!(first.0.load(Ordering::Relaxed), 1);
+    assert_eq!(second.0.load(Ordering::Relaxed), 1);
+    assert_eq!(drops.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn cancelling_a_fallible_stream_drops_its_pinned_future_once() {
+    use jenner::Stream;
+    let drops = Arc::new(AtomicUsize::new(0));
+    {
+        let mut stream = pin!(fallible_wait(drops.clone()));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert_eq!(stream.as_mut().poll_next(&mut cx), Poll::Pending);
+        assert_eq!(drops.load(Ordering::Relaxed), 0);
+    }
     assert_eq!(drops.load(Ordering::Relaxed), 1);
 }

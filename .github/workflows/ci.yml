@@ -33,4 +33,4 @@ jobs:
         with:
           toolchain: nightly-2026-10-24
           components: miri
-      - run: cargo miri test -p jenner --test lifecycle --test effects
+      - run: cargo miri test -p jenner --test lifecycle --test effects --test generators

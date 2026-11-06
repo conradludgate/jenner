@@ -3,6 +3,7 @@ use syn::{parse::Parse, ItemFn, Result};
 pub struct AttrGenerator {
     pub func: ItemFn,
     pub yields: bool,
+    pub yield_ty: Option<syn::Type>,
     pub fallible: bool,
 }
 
@@ -11,6 +12,7 @@ impl Parse for AttrGenerator {
         Ok(AttrGenerator {
             func: input.parse()?,
             yields: false,
+            yield_ty: None,
             fallible: false,
         })
     }

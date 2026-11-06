@@ -1,162 +1,59 @@
-use std::mem;
-
-use quote::format_ident;
-use syn::punctuated::Punctuated;
-use syn::{
-    AssocType, GenericArgument, ItemFn, Path, PathArguments, Result, Signature, Stmt, TraitBound,
-    Type, TypeImplTrait, TypeParamBound, TypePath, TypeTuple,
-};
-
 use crate::{gen_visit::GenVisitor, parse::AttrGenerator};
+use std::mem;
+use syn::{parse_quote, ItemFn, Result, ReturnType, Stmt, Type};
 
 impl AttrGenerator {
     pub fn process(mut self) -> Result<ItemFn> {
         let ItemFn { sig, block, .. } = &mut self.func;
-        let return_ty = Self::take_return_ty(sig);
+        let declared_return = match mem::replace(&mut sig.output, ReturnType::Default) {
+            ReturnType::Default => parse_quote!(()),
+            ReturnType::Type(_, ty) => *ty,
+        };
         let sync = sig.asyncness.take().is_none();
-
-        let yield_ty = if self.yields {
-            new_path! { ::jenner::effective::Multiple }
+        let general = self.yield_ty.is_some();
+        let (yield_ty, return_ty): (Type, Type) = if let Some(yield_ty) = self.yield_ty {
+            (yield_ty, declared_return.clone())
+        } else if self.yields && self.fallible {
+            (
+                parse_quote!(<#declared_return as ::jenner::__private::ResultTypes>::Ok),
+                parse_quote!(::core::result::Result<(), <#declared_return as ::jenner::__private::ResultTypes>::Error>),
+            )
+        } else if self.yields {
+            (declared_return.clone(), parse_quote!(()))
         } else {
-            new_path! { ::jenner::effective::Single }
-        };
-        let async_ty = if sync {
-            new_path! { ::jenner::effective::Blocking }
-        } else {
-            new_path! { ::jenner::effective::Async }
-        };
-        let fallible_ty = if self.fallible {
-            create_fallible_path(&return_ty)
-        } else {
-            new_path! { ::core::convert::Infallible }
-        };
-        let return_ty = if self.fallible {
-            create_fallible_return_type(return_ty)
-        } else {
-            return_ty
+            (
+                parse_quote!(::core::convert::Infallible),
+                declared_return.clone(),
+            )
         };
 
-        sig.output = syn::ReturnType::Type(
-            Default::default(),
-            Box::new(Type::ImplTrait(TypeImplTrait {
-                impl_token: Default::default(),
-                bounds: [TypeParamBound::Trait(TraitBound {
-                    paren_token: None,
-                    modifier: syn::TraitBoundModifier::None,
-                    lifetimes: None,
-                    path: create_impl_effective(return_ty, fallible_ty, yield_ty, async_ty),
-                })]
-                .into_iter()
-                .collect(),
-            })),
-        );
-
+        let output: Type = match (sync, self.yields, self.fallible, general) {
+            (true, _, _, true) => {
+                parse_quote!(impl ::jenner::Coroutine<(), Yield = #yield_ty, Return = #return_ty>)
+            }
+            (false, _, _, true) => {
+                parse_quote!(impl ::jenner::AsyncGenerator<Yield = #yield_ty, Return = #return_ty>)
+            }
+            (true, false, _, false) => parse_quote!(impl ::jenner::SyncValue<#return_ty>),
+            (false, false, _, false) => parse_quote!(impl ::jenner::AsyncValue<#return_ty>),
+            (true, true, false, false) => parse_quote!(impl ::jenner::SyncStream<#yield_ty>),
+            (false, true, false, false) => parse_quote!(impl ::jenner::AsyncStream<#yield_ty>),
+            (true, true, true, false) => {
+                parse_quote!(impl ::jenner::TrySyncStream<#yield_ty, <#declared_return as ::jenner::__private::ResultTypes>::Error>)
+            }
+            (false, true, true, false) => {
+                parse_quote!(impl ::jenner::TryAsyncStream<#yield_ty, <#declared_return as ::jenner::__private::ResultTypes>::Error>)
+            }
+        };
+        sig.output = parse_quote!(-> #output);
         let visitor = GenVisitor::new(sync, self.yields, self.fallible);
-        block.stmts = vec![Stmt::Expr(visitor.into_generator(&mut block.stmts), None)];
+        let generator = visitor.into_generator(&mut block.stmts)?;
+        let generator = if !sync && self.yields && self.fallible && !general {
+            parse_quote!(::jenner::__private::TryAsyncStreamImpl::new(#generator))
+        } else {
+            generator
+        };
+        block.stmts = vec![Stmt::Expr(generator, None)];
         Ok(self.func)
     }
-
-    fn take_return_ty(sig: &mut Signature) -> Type {
-        match mem::replace(&mut sig.output, syn::ReturnType::Default) {
-            syn::ReturnType::Default => Type::Tuple(TypeTuple {
-                paren_token: Default::default(),
-                elems: Punctuated::new(),
-            }),
-            syn::ReturnType::Type(_, t) => *t,
-        }
-    }
-}
-
-fn create_fallible_path(return_ty: &Type) -> Path {
-    let simple_try = new_path!(::jenner::effective::Fallible::Break);
-    let failure = TypePath {
-        qself: Some(syn::QSelf {
-            lt_token: Default::default(),
-            ty: Box::new(return_ty.clone()),
-            position: 3,
-            as_token: Default::default(),
-            gt_token: Default::default(),
-        }),
-        path: simple_try,
-    };
-    let mut path = new_path! { ::jenner::effective::Failure };
-    path.segments.last_mut().unwrap().arguments =
-        PathArguments::AngleBracketed(syn::AngleBracketedGenericArguments {
-            colon2_token: None,
-            lt_token: Default::default(),
-            args: [GenericArgument::Type(failure.into())]
-                .into_iter()
-                .collect(),
-            gt_token: Default::default(),
-        });
-    path
-}
-
-fn create_fallible_return_type(return_ty: Type) -> Type {
-    let simple_try = new_path!(::jenner::effective::Fallible::Continue);
-    let failure = TypePath {
-        qself: Some(syn::QSelf {
-            lt_token: Default::default(),
-            ty: Box::new(return_ty),
-            position: 3,
-            as_token: Default::default(),
-            gt_token: Default::default(),
-        }),
-        path: simple_try,
-    };
-
-    Type::Path(failure)
-}
-
-fn create_impl_effective(
-    return_ty: Type,
-    fallible_ty: Path,
-    yield_ty: Path,
-    async_ty: Path,
-) -> Path {
-    let mut effective = new_path!(::jenner::effective::Effective);
-    effective.segments.last_mut().unwrap().arguments =
-        PathArguments::AngleBracketed(syn::AngleBracketedGenericArguments {
-            colon2_token: None,
-            lt_token: Default::default(),
-            args: [
-                GenericArgument::AssocType(AssocType {
-                    ident: format_ident!("Item"),
-                    generics: None,
-                    eq_token: Default::default(),
-                    ty: return_ty,
-                }),
-                GenericArgument::AssocType(AssocType {
-                    ident: format_ident!("Failure"),
-                    generics: None,
-                    eq_token: Default::default(),
-                    ty: Type::Path(TypePath {
-                        qself: None,
-                        path: fallible_ty,
-                    }),
-                }),
-                GenericArgument::AssocType(AssocType {
-                    ident: format_ident!("Produces"),
-                    generics: None,
-                    eq_token: Default::default(),
-                    ty: Type::Path(TypePath {
-                        qself: None,
-                        path: yield_ty,
-                    }),
-                }),
-                GenericArgument::AssocType(AssocType {
-                    ident: format_ident!("Async"),
-                    generics: None,
-                    eq_token: Default::default(),
-                    ty: Type::Path(TypePath {
-                        qself: None,
-                        path: async_ty,
-                    }),
-                }),
-            ]
-            .into_iter()
-            .collect(),
-            gt_token: Default::default(),
-        });
-    effective
 }

@@ -1,62 +1,73 @@
-use std::{ops::GeneratorState, pin::Pin};
+use std::{
+    ops::{Coroutine, CoroutineState},
+    pin::Pin,
+};
 
-use crate::{Finally, SyncGenerator};
+/// Iterator adapters for a pinned synchronous generator.
+pub trait SyncGeneratorExt: Coroutine<()> {
+    /// Borrow a generator as an iterator without moving or allocating it.
+    fn iter(self: Pin<&mut Self>) -> Iter<'_, Self>
+    where
+        Self: Coroutine<(), Return = ()>,
+    {
+        Iter { generator: self }
+    }
 
-#[doc(hidden)]
-pub trait IntoSyncGenerator {
-    type Yield;
-    type Return;
-    type SyncGenerator: SyncGenerator<Self::Yield, Self::Return>;
-    fn into_sync_generator(self) -> Self::SyncGenerator;
-}
-
-impl<S> IntoSyncGenerator for S
-where
-    S: Iterator,
-{
-    type Yield = S::Item;
-    type Return = ();
-    type SyncGenerator = IterGenerator<Self>;
-
-    fn into_sync_generator(self) -> Self::SyncGenerator {
-        IterGenerator { iter: self }
+    /// Yield each item as `Ok`, followed by a terminal `Err` if it fails.
+    fn try_iter<E>(self: Pin<&mut Self>) -> TryIter<'_, Self>
+    where
+        Self: Coroutine<(), Return = Result<(), E>>,
+    {
+        TryIter {
+            generator: self,
+            done: false,
+        }
     }
 }
 
-#[doc(hidden)]
-pub struct IterGenerator<I> {
-    iter: I,
+impl<G: Coroutine<()> + ?Sized> SyncGeneratorExt for G {}
+
+/// An iterator borrowing a pinned generator; created by [`SyncGeneratorExt::iter`].
+pub struct Iter<'a, G: ?Sized> {
+    generator: Pin<&'a mut G>,
 }
 
-impl<I> Unpin for IterGenerator<I> {}
-
-impl<I> Iterator for IterGenerator<I>
-where
-    I: Iterator,
-{
-    type Item = I::Item;
+impl<G: Coroutine<(), Return = ()> + ?Sized> Iterator for Iter<'_, G> {
+    type Item = G::Yield;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next()
+        match self.generator.as_mut().resume(()) {
+            CoroutineState::Yielded(item) => Some(item),
+            CoroutineState::Complete(()) => None,
+        }
     }
 }
 
-impl<I> Finally for IterGenerator<I>
-where
-    I: Iterator,
-{
-    type Output = ();
-    fn finally(self) -> Self::Output {}
+/// A fallible iterator borrowing a pinned generator.
+///
+/// Created by [`SyncGeneratorExt::try_iter`]. Its terminal error is returned
+/// once, followed by `None` on subsequent calls.
+pub struct TryIter<'a, G: ?Sized> {
+    generator: Pin<&'a mut G>,
+    done: bool,
 }
 
-impl<S> SyncGenerator<S::Item, ()> for IterGenerator<S>
+impl<G, E> Iterator for TryIter<'_, G>
 where
-    S: Iterator,
+    G: Coroutine<(), Return = Result<(), E>> + ?Sized,
 {
-    fn resume(mut self: Pin<&mut Self>) -> GeneratorState<S::Item, ()> {
-        match self.iter.next() {
-            Some(r) => GeneratorState::Yielded(r),
-            None => GeneratorState::Complete(()),
+    type Item = Result<G::Yield, E>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+        match self.generator.as_mut().resume(()) {
+            CoroutineState::Yielded(item) => Some(Ok(item)),
+            CoroutineState::Complete(result) => {
+                self.done = true;
+                result.err().map(Err)
+            }
         }
     }
 }

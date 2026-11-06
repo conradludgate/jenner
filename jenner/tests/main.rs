@@ -1,9 +1,7 @@
 #![feature(coroutines)]
 
-use effective::{wrappers::future, Async, Effective, EffectiveExt, Multiple};
-use jenner::effect;
+use jenner::{effect, AsyncStream, SyncGeneratorExt};
 use std::{
-    convert::Infallible,
     pin::pin,
     time::{Duration, Instant},
 };
@@ -11,7 +9,7 @@ use std::{
 #[tokio::test]
 async fn streams() {
     let start = Instant::now();
-    let v = collect(double(countdown())).shim().await;
+    let v = collect(double(countdown())).await;
     assert_eq!(v, vec![10, 8, 6, 4, 2, 0]);
     // expected to take around a second;
     assert!(start.elapsed() > Duration::from_millis(200 * 5));
@@ -22,15 +20,13 @@ async fn countdown() -> u32 {
     yield 5;
 
     for i in (0..5).rev() {
-        future(tokio::time::sleep(Duration::from_millis(200))).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
         yield i;
     }
 }
 
 #[effect(yields)]
-async fn double(
-    input: impl Effective<Item = u32, Failure = Infallible, Produces = Multiple, Async = Async>,
-) -> u32 {
+async fn double(input: impl AsyncStream<u32>) -> u32 {
     #[effect(async)]
     for i in input {
         yield i * 2;
@@ -38,9 +34,7 @@ async fn double(
 }
 
 #[effect]
-async fn collect<T: std::fmt::Debug>(
-    input: impl Effective<Item = T, Failure = Infallible, Produces = Multiple, Async = Async>,
-) -> Vec<T> {
+async fn collect<T: std::fmt::Debug>(input: impl AsyncStream<T>) -> Vec<T> {
     let mut v = vec![];
     #[effect(async)]
     for i in input {
@@ -53,12 +47,7 @@ async fn collect<T: std::fmt::Debug>(
 #[test]
 fn iterators() {
     let mut generator = pin!(fibonacii());
-    let v: Vec<_> = effective::wrappers::from_fn(|cx: &mut std::task::Context<'_>| {
-        generator.as_mut().poll_effect(cx)
-    })
-    .shim()
-    .take(10)
-    .collect();
+    let v: Vec<_> = generator.as_mut().iter().take(10).collect();
     assert_eq!(v, vec![0, 1, 1, 2, 3, 5, 8, 13, 21, 34]);
 }
 
@@ -77,15 +66,13 @@ fn fibonacii() -> usize {
 #[tokio::test]
 async fn complete() {
     let start = Instant::now();
-    print(countdown1()).shim().await;
+    print(countdown1()).await;
     // expected to take around a second;
     assert!(start.elapsed() > Duration::from_millis(200 * 5));
 }
 
 #[effect]
-async fn print(
-    input: impl Effective<Item = u32, Failure = Infallible, Produces = Multiple, Async = Async>,
-) {
+async fn print(input: impl AsyncStream<u32>) {
     #[effect(async)]
     for i in input {
         println!("got {:?}", i);
@@ -96,7 +83,7 @@ async fn print(
 async fn countdown1() -> u32 {
     yield 5;
     for i in (0..5).rev() {
-        future(tokio::time::sleep(Duration::from_millis(200))).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
         yield i;
     }
 }

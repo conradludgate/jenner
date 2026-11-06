@@ -7,8 +7,7 @@ streams using a much easier syntax, much akin to how async/await futures work.
 
 ```rust
 #![feature(coroutines)] // required nightly feature
-use jenner::{effect, effective::{wrappers::future, Async, Effective, EffectiveExt, Multiple}};
-use std::convert::Infallible;
+use jenner::{effect, AsyncStream};
 
 /// Creating brand new streams
 #[effect(yields)]
@@ -16,7 +15,7 @@ async fn countdown() -> u32 {
     yield 5;
     for i in (0..5).rev() {
         // futures can be awaited in these streams
-        future(tokio::time::sleep(std::time::Duration::from_secs(1))).await;
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         // yielding values corresponds to the stream item
         yield i;
     }
@@ -25,7 +24,7 @@ async fn countdown() -> u32 {
 /// Consuming streams to create new streams (akin to input.map())
 #[effect(yields)]
 async fn double(
-    input: impl Effective<Item = u32, Failure = Infallible, Produces = Multiple, Async = Async>,
+    input: impl AsyncStream<u32>,
 ) -> u32 {
     // custom async for syntax handles the polling of the stream automatically for you
     #[effect(async)]
@@ -37,7 +36,7 @@ async fn double(
 /// Futures are also supported
 #[effect]
 async fn collect<T: std::fmt::Debug>(
-    input: impl Effective<Item = T, Failure = Infallible, Produces = Multiple, Async = Async>,
+    input: impl AsyncStream<T>,
 ) -> Vec<T> {
     let mut v = vec![];
     #[effect(async)]
@@ -45,7 +44,7 @@ async fn collect<T: std::fmt::Debug>(
         println!("{:?}", i);
         v.push(i)
     }
-    // Return value of the function is the output of the future adapter
+    // Return value of the function is the output of the future
     v
 }
 ```
@@ -60,22 +59,16 @@ The expansion snippets are schematic: `$expr`, `$stream` and `$body` stand for u
 Firstly, the function signature is re-written to
 
 ```rust,ignore
-fn countdown() -> impl Effective<
-    Item = u32, Failure = Infallible, Produces = Multiple, Async = Async,
->;
-fn double(
-    input: impl Effective<Item = u32, Failure = Infallible, Produces = Multiple, Async = Async>,
-) -> impl Effective<Item = u32, Failure = Infallible, Produces = Multiple, Async = Async>;
-fn collect<T: std::fmt::Debug>(
-    input: impl Effective<Item = T, Failure = Infallible, Produces = Multiple, Async = Async>,
-) -> impl Effective<Item = Vec<T>, Failure = Infallible, Produces = Single, Async = Async>;
+fn countdown() -> impl AsyncStream<u32>;
+fn double(input: impl AsyncStream<u32>) -> impl AsyncStream<u32>;
+fn collect<T: std::fmt::Debug>(input: impl AsyncStream<T>) -> impl AsyncValue<Vec<T>>;
 ```
 
 Then, a yielding async function's body is wrapped in this expression
 (`$body` stands for the transformed body, and `__cx` for the generated context variable)
 
 ```rust,ignore
-::jenner::__private::AsyncGeneratorImpl::create(
+::jenner::__private::Generator::new(
     #[coroutine]
     static move |mut __cx: ::jenner::__private::UnsafeContextRef| {
         $body
@@ -83,12 +76,34 @@ Then, a yielding async function's body is wrapped in this expression
 )
 ```
 
-The `create` function is fairly simple.
-It accepts a `Coroutine<UnsafeContextRef, Yield = Poll<Y>, Return = ()>` and returns
-an `Effective<Item = Y, Failure = Infallible, Produces = Multiple, Async = Async>` value.
-Calling `.shim()` on this value provides a stream. For infallible async functions
-without `yields`, the `AsyncImpl` wrapper provides a single item, and `.shim()`
-provides a future.
+The wrapper implements `AsyncGenerator` and projects the pinned coroutine. Its
+`poll_resume` method returns `Poll<CoroutineState<Yield, Return>>`: a pending
+operation, a yielded item, or the final return value.
+
+Trait aliases describe the common shapes. `AsyncStream<T>` combines
+`AsyncGenerator<Yield = T, Return = ()>` with `Stream<Item = T>`, and
+`AsyncValue<T>` combines `AsyncGenerator<Yield = Infallible, Return = T>` with
+`Future<Output = T>`. These values support ordinary stream combinators and `.await`.
+
+To yield items and return a separate final value, specify the yield type:
+
+```rust
+#![feature(coroutines)]
+use jenner::effect;
+
+#[effect(yields(u32))]
+async fn counted() -> usize {
+    yield 10;
+    yield 20;
+    2
+}
+```
+
+This returns `impl AsyncGenerator<Yield = u32, Return = usize>`. Its final value is
+available through `poll_resume`; it is not discarded by a stream adapter.
+Synchronous functions use `Coroutine<(), Yield = Y, Return = R>` with the same
+annotations. Pin a synchronous stream with `pin!`, then use `.as_mut().iter()`
+from `SyncGeneratorExt` to borrow it as an iterator without allocating.
 
 ### Yields
 
@@ -110,8 +125,9 @@ the generator supplies the context for the next poll, which is assigned to `__cx
 ### Awaits
 
 Native `.await` syntax is not available inside a coroutine body.
-To get around this, the following rule is applied. The operand is an infallible,
-single-item `Effective`; `wrappers::future` adapts a standard Rust future.
+To get around this, the following rule is applied. The operand implements
+`IntoFuture`, just as in an ordinary async function. Nested async blocks and
+closures keep their own suspension and return boundaries.
 
 Any `.await` keywords in the body are modified from
 
@@ -123,19 +139,18 @@ into
 
 ```rust,ignore
 {
-    let mut fut = ::std::pin::pin!($expr);
+    let mut fut = ::core::pin::pin!(IntoFuture::into_future($expr));
     loop {
         let polled = {
             // The context borrow is confined to this child poll, before any yield.
             let cx = unsafe { __cx.get_context() };
-            Effective::poll_effect(fut.as_mut(), cx)
+            Future::poll(fut.as_mut(), cx)
         };
         match polled {
-            EffectResult::Item(r) => break r,
-            EffectResult::Pending(_) => {
+            Poll::Ready(r) => break r,
+            Poll::Pending => {
                 __cx = yield Poll::Pending;
             }
-            EffectResult::Done(_) | EffectResult::Failure(_) => unreachable!(),
         }
     }
 }
@@ -155,7 +170,7 @@ This is pretty close to how `await` works in regular rust's `async` blocks.
 ### For Await
 
 Iterating over streams is currently a very poor experience.
-Instead, we provide a simple syntax to iterate any generator asynchronously.
+Instead, we provide a simple syntax to iterate any `Stream` asynchronously.
 
 ```rust,ignore
 #[effect(async)]
@@ -164,8 +179,8 @@ for i in $stream {
 }
 ```
 
-The loop consumes an infallible asynchronous `Effective` with `Produces = Multiple`.
-Each item is passed to the body, and `EffectResult::Done` finishes the loop.
+The loop consumes any `Stream`. Each item is passed to the body, and `None`
+finishes the loop.
 An ordinary `break` exits the loop; its output is `()`.
 
 When processed, the code turns into
@@ -178,13 +193,11 @@ When processed, the code turns into
             let polled = {
                 // The context borrow ends before any suspension.
                 let cx = unsafe { __cx.get_context() };
-                Effective::poll_effect(gen.as_mut(), cx)
+                Stream::poll_next(gen.as_mut(), cx)
             };
             match polled {
-                EffectResult::Done(_) => break None,
-                EffectResult::Item(i) => break Some(i),
-                EffectResult::Failure(_) => unreachable!(),
-                EffectResult::Pending(_) => {
+                Poll::Ready(next) => break next,
+                Poll::Pending => {
                     __cx = yield Poll::Pending;
                 }
             }
@@ -198,13 +211,13 @@ This is pretty similar to the `await` case, but repeated.
 
 ### Futures
 
-An `#[effect] async fn` without `yields` produces a single value. Calling
-`.shim()` adapts it to a future whose output is the function's return type.
-For example, `collect(double(countdown())).shim().await` returns a `Vec<u32>`.
+An `#[effect] async fn` without `yields` returns `impl AsyncValue<T>`, where `T`
+is the function's return type. For example,
+`collect(double(countdown())).await` returns a `Vec<u32>`.
 
-The `AsyncImpl` wrapper requires `Yield = Poll<Infallible>`, which determines the
-yield type for a function that never yields an item. Its coroutine return value
-becomes `EffectResult::Item`, with `Produces = Single`.
+Its coroutine has `Yield = Poll<Infallible>`, which determines the yield type
+for a function that never yields an item. The wrapper maps its final return
+value to `Poll::Ready` in the `Future` implementation.
 
 ### Error Handling
 
@@ -214,16 +227,16 @@ annotation describes the yielded items.
 
 ```rust
 #![feature(coroutines)]
-use jenner::{effect, effective::wrappers::future};
+use jenner::effect;
 
 #[effect(yields, fallible)]
 async fn make_requests() -> Result<u32, &'static str> {
     for i in 0..5 {
-        let resp = future(async move {
+        let resp = async move {
             // imagine this makes a http request that could fail
             let req = if i == 4 { Err("4 is a random number") } else { Ok(i) };
             req
-        }).await;
+        }.await;
 
         // Using the `?` syntax to return early with the error
         // but continue with any good values. (can be used anywhere and not exclusively with yields)
@@ -232,10 +245,16 @@ async fn make_requests() -> Result<u32, &'static str> {
 }
 ```
 
-The fallible wrapper maps the coroutine's `Err` return to `EffectResult::Failure`.
 Successful completion is wrapped in `Ok` by the macro; a yielding function's body
-finishes with `()`.
+finishes with `()`. Ordinary Rust `?` propagates errors from the coroutine and
+supports error conversion through `From`.
 
-For an asynchronous effect, `?` is expanded through `effective::Fallible::branch`:
-continuation values remain in the body, and failures return `Err` from the coroutine.
-The helper traits determine the item and failure types from the return annotation.
+`TryAsyncStream<T, E>` has `Yield = T` and `Return = Result<(), E>`. Its `Stream`
+implementation emits each item as `Ok`, then a terminal error as `Err` once,
+followed by `None`. For example, `make_requests()` produces `Ok(0)` through
+`Ok(3)`, then `Err("4 is a random number")`. Synchronous fallible streams expose
+the same sequence through `.as_mut().try_iter()`.
+
+Functions without `yields` return a single `Result<T, E>`. A `fallible` body has
+an unwrapped successful tail expression; a body that writes its own `Ok(...)`
+can use `#[effect]` without the `fallible` flag.

@@ -1,65 +1,29 @@
 use parse::AttrGenerator;
-use proc_macro::TokenStream as TokenStream1;
-use proc_macro2::Ident;
+use proc_macro::TokenStream;
 use quote::ToTokens;
-use syn::{
-    ext::IdentExt, parse::Parser, parse_macro_input, punctuated::Punctuated, token::Comma, Error,
-};
+use syn::{parse_macro_input, punctuated::Punctuated, Meta, Token};
 
-macro_rules! new_path {
-    (::$($ident:ident)::*) => {
-        new_path!(::proc_macro2::Span::call_site() => ::$($ident)::*)
-    };
-    ($span:expr => ::$($ident:ident)::*) => {
-        ::syn::Path {
-            leading_colon: Some(::syn::token::PathSep::default()),
-            segments: segments!($span => $($ident)::*)
-        }
-    };
-    ($($ident:ident)::*) => {
-        new_path!(::proc_macro2::Span::call_site() => $($ident)::*)
-    };
-    ($span:expr => $($ident:ident)::*) => {
-        ::syn::Path {
-            leading_colon: None,
-            segments: segments!($span => $($ident)::*)
-        }
-    };
-}
-
-macro_rules! segments {
-    ($span:expr => $($ident:ident)::*) => {{
-        [$(
-            ::syn::PathSegment{
-                ident: ::syn::Ident::new(stringify!($ident), $span),
-                arguments: ::syn::PathArguments::None,
-            }
-        ),*].into_iter().collect()
-    }};
-}
-
-mod break_visit;
 mod gen_visit;
 mod parse;
 mod process;
 
 #[proc_macro_attribute]
-pub fn effect(args: TokenStream1, input: TokenStream1) -> TokenStream1 {
+pub fn effect(args: TokenStream, input: TokenStream) -> TokenStream {
     let mut input = parse_macro_input!(input as AttrGenerator);
-
-    fn parser(input: syn::parse::ParseStream) -> syn::Result<Punctuated<Ident, Comma>> {
-        Punctuated::<Ident, Comma>::parse_terminated_with(input, Ident::parse_any)
-    }
-    let effects = match parser.parse(args) {
-        Ok(x) => x,
-        Err(e) => return e.to_compile_error().into(),
-    };
+    let effects = parse_macro_input!(args with Punctuated::<Meta, Token![,]>::parse_terminated);
     for effect in effects {
-        match effect.to_string().as_str() {
-            "fallible" => input.fallible = true,
-            "yields" => input.yields = true,
-            _other => {
-                return Error::new(effect.span(), "unknown effect")
+        match effect {
+            Meta::Path(path) if path.is_ident("fallible") => input.fallible = true,
+            Meta::Path(path) if path.is_ident("yields") => input.yields = true,
+            Meta::List(list) if list.path.is_ident("yields") => {
+                input.yields = true;
+                match syn::parse2(list.tokens) {
+                    Ok(ty) => input.yield_ty = Some(ty),
+                    Err(error) => return error.into_compile_error().into(),
+                }
+            }
+            other => {
+                return syn::Error::new_spanned(other, "unknown effect")
                     .into_compile_error()
                     .into()
             }
@@ -68,6 +32,9 @@ pub fn effect(args: TokenStream1, input: TokenStream1) -> TokenStream1 {
 
     input
         .process()
-        .map_or_else(|e| e.to_compile_error(), ToTokens::into_token_stream)
+        .map_or_else(
+            |error| error.to_compile_error(),
+            ToTokens::into_token_stream,
+        )
         .into()
 }
