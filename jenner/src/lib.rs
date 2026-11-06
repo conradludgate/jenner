@@ -1,5 +1,4 @@
-//! Coroutine macros that produce [`effective::Effective`] values, with adapters
-//! for futures, streams and iterators.
+//! Coroutine macros for futures, streams and synchronous generators.
 //!
 //! # Asynchronous example
 //!
@@ -7,10 +6,8 @@
 //! // add the required nightly feature
 //! #![feature(coroutines)]
 //!
-//! use effective::{Effective, EffectiveExt, Async, Multiple};
-//! use effective::wrappers::future;
-//! use jenner::effect;
-//! use std::{time::{Instant, Duration}, convert::Infallible};
+//! use jenner::{effect, AsyncStream};
+//! use std::time::{Instant, Duration};
 //!
 //! /// Creates a stream that yields u32s that countdown from 5 to 0.
 //! /// Waiting 0.2s between each (1s total)
@@ -18,7 +15,7 @@
 //! async fn countdown() -> u32 {
 //!     yield 5;
 //!     for i in (0..5).rev() {
-//!         future(tokio::time::sleep(Duration::from_millis(200))).await;
+//!         tokio::time::sleep(Duration::from_millis(200)).await;
 //!         yield i;
 //!     }
 //! }
@@ -27,7 +24,7 @@
 //! /// pushing it to a vec that is returned
 //! #[effect]
 //! async fn collect(
-//!     input: impl Effective<Item = u32, Failure = Infallible, Produces = Multiple, Async = Async>,
+//!     input: impl AsyncStream<u32>,
 //! ) -> Vec<u32> {
 //!     let mut v = vec![];
 //!
@@ -46,7 +43,7 @@
 //!
 //!     // countdown() is a valid stream
 //!     // collect(...) is a valid future
-//!     let v = collect(countdown()).shim().await;
+//!     let v = collect(countdown()).await;
 //!     assert_eq!(v, vec![5, 4, 3, 2, 1, 0]);
 //!
 //!     assert!(start.elapsed() > Duration::from_millis(200 * 5));
@@ -58,8 +55,7 @@
 //! ```rust
 //! #![feature(coroutines)]
 //!
-//! use effective::{Effective, EffectiveExt};
-//! use jenner::effect;
+//! use jenner::{effect, SyncGeneratorExt};
 //! use std::pin::pin;
 //!
 //! #[effect(yields)]
@@ -77,18 +73,30 @@
 //! }
 //!
 //! fn main() {
-//!     // fibonacii() is a valid `Iterator<Item = usize>`
+//!     // Pin the generator, then borrow it as an iterator.
 //!     let mut generator = pin!(fibonacii());
-//! let v: Vec<_> = effective::wrappers::from_fn(|cx: &mut std::task::Context<'_>| generator.as_mut().poll_effect(cx))
-//! .shim().take(10).collect();
+//!     let v: Vec<_> = generator.as_mut().iter().take(10).collect();
 //!     assert_eq!(v, vec![0, 1, 1, 2, 3, 5, 8, 13, 21, 34]);
 //! }
 //! ```
 #![feature(coroutine_trait)]
+#![feature(trait_alias)]
 
-pub use effective;
-/// Apply to a function to convert it into an iterator, allowing the use of the `yield` keyword.
-/// Iterators can be synchronous or asynchronous.
+mod generator;
+mod iter;
+
+pub use futures_core::Stream;
+pub use generator::{
+    AsyncGenerator, AsyncStream, AsyncValue, SyncStream, SyncValue, TryAsyncStream, TrySyncStream,
+};
+pub use iter::{Iter, SyncGeneratorExt, TryIter};
+pub use std::ops::{Coroutine, CoroutineState};
+
+/// Apply to a function to produce a synchronous or asynchronous generator.
+///
+/// `yields` uses the return annotation as the item type. `yields(T)` specifies
+/// the item type separately and preserves the function's final return value.
+/// `fallible` wraps the successful body in `Ok`, allowing ordinary `?` errors.
 ///
 /// # Asynchronous example
 ///
@@ -96,10 +104,8 @@ pub use effective;
 /// // add the required nightly feature
 /// #![feature(coroutines)]
 ///
-/// use effective::{Effective, EffectiveExt, Async, Multiple};
-/// use effective::wrappers::future;
-/// use jenner::effect;
-/// use std::{time::{Instant, Duration}, convert::Infallible};
+/// use jenner::{effect, AsyncStream};
+/// use std::time::{Instant, Duration};
 ///
 /// /// Creates a stream that yields u32s that countdown from 5 to 0.
 /// /// Waiting 0.2s between each (1s total)
@@ -107,7 +113,7 @@ pub use effective;
 /// async fn countdown() -> u32 {
 ///     yield 5;
 ///     for i in (0..5).rev() {
-///         future(tokio::time::sleep(Duration::from_millis(200))).await;
+///         tokio::time::sleep(Duration::from_millis(200)).await;
 ///         yield i;
 ///     }
 /// }
@@ -116,7 +122,7 @@ pub use effective;
 /// /// pushing it to a vec that is returned
 /// #[effect]
 /// async fn collect(
-///     input: impl Effective<Item = u32, Failure = Infallible, Produces = Multiple, Async = Async>,
+///     input: impl AsyncStream<u32>,
 /// ) -> Vec<u32> {
 ///     let mut v = vec![];
 ///
@@ -135,7 +141,7 @@ pub use effective;
 ///
 ///     // countdown() is a valid stream
 ///     // collect(...) is a valid future
-///     let v = collect(countdown()).shim().await;
+///     let v = collect(countdown()).await;
 ///     assert_eq!(v, vec![5, 4, 3, 2, 1, 0]);
 ///
 ///     assert!(start.elapsed() > Duration::from_millis(200 * 5));
@@ -147,8 +153,7 @@ pub use effective;
 /// ```
 /// #![feature(coroutines)]
 ///
-/// use effective::{Effective, EffectiveExt};
-/// use jenner::effect;
+/// use jenner::{effect, SyncGeneratorExt};
 /// use std::pin::pin;
 ///
 /// #[effect(yields)]
@@ -166,25 +171,28 @@ pub use effective;
 /// }
 ///
 /// fn main() {
-///     // fibonacii().shim() is a valid `Iterator<Item = usize>`
+///     // Pin the generator, then borrow it as an iterator.
 ///     let mut generator = pin!(fibonacii());
-/// let v: Vec<_> = effective::wrappers::from_fn(|cx: &mut std::task::Context<'_>| generator.as_mut().poll_effect(cx))
-/// .shim().take(10).collect();
+///     let v: Vec<_> = generator.as_mut().iter().take(10).collect();
 ///     assert_eq!(v, vec![0, 1, 1, 2, 3, 5, 8, 13, 21, 34]);
 /// }
 /// ```
 pub use jenner_macro::effect;
 
 mod asynch;
-mod sync;
 
 #[doc(hidden)]
 pub mod __private {
-    pub use crate::asynch::{
-        AsyncFallibleGeneratorImpl, AsyncFallibleImpl, AsyncGeneratorImpl, AsyncImpl,
-        UnsafeContextRef,
-    };
-    pub use crate::sync::{SyncFallibleGeneratorImpl, SyncGeneratorImpl};
-    // pub use std::future::{Future, IntoFuture};
-    pub use std::{pin, task};
+    pub use crate::asynch::UnsafeContextRef;
+    pub use crate::generator::{Generator, TryAsyncStreamImpl};
+
+    // Extract types from Result aliases without parsing their spelling in macros.
+    pub trait ResultTypes {
+        type Ok;
+        type Error;
+    }
+    impl<T, E> ResultTypes for Result<T, E> {
+        type Ok = T;
+        type Error = E;
+    }
 }
