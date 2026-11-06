@@ -53,35 +53,35 @@ impl GenVisitor {
 
         match (sync, yields, fallible) {
             (true, true, false) => parse_quote! {
-                ::jenner::__private::SyncGeneratorImpl::create(static || { #(#stmts)* })
+                ::jenner::__private::SyncGeneratorImpl::create(#[coroutine] static move || { #(#stmts)* })
             },
             (true, false, false) => parse_quote! {
-                ::jenner::effective::wrappers::from_fn_once(|| { #(#stmts)* })
+                ::jenner::effective::wrappers::from_fn_once(move || { #(#stmts)* })
             },
             (false, true, false) => parse_quote! {
                 ::jenner::__private::AsyncGeneratorImpl::create(
-                    static |mut #cx: ::jenner::__private::UnsafeContextRef| { #(#stmts)* }
+                    #[coroutine] static move |mut #cx: ::jenner::__private::UnsafeContextRef| { #(#stmts)* }
                 )
             },
             (false, false, false) => parse_quote! {
                 ::jenner::__private::AsyncImpl::create(
-                    static |mut #cx: ::jenner::__private::UnsafeContextRef| { #(#stmts)* }
+                    #[coroutine] static move |mut #cx: ::jenner::__private::UnsafeContextRef| { #(#stmts)* }
                 )
             },
             (true, true, true) => parse_quote! {
-                ::jenner::__private::SyncFallibleGeneratorImpl::create(static || Ok({ #(#stmts)* }))
+                ::jenner::__private::SyncFallibleGeneratorImpl::create(#[coroutine] static move || Ok({ #(#stmts)* }))
             },
             (true, false, true) => parse_quote! {
                 ::jenner::effective::wrappers::fallible((|| Ok({ #(#stmts)* }))())
             },
             (false, true, true) => parse_quote! {
                 ::jenner::__private::AsyncFallibleGeneratorImpl::create(
-                    static |mut #cx: ::jenner::__private::UnsafeContextRef| Ok({ #(#stmts)* })
+                    #[coroutine] static move |mut #cx: ::jenner::__private::UnsafeContextRef| Ok({ #(#stmts)* })
                 )
             },
             (false, false, true) => parse_quote! {
                 ::jenner::__private::AsyncFallibleImpl::create(
-                    static |mut #cx: ::jenner::__private::UnsafeContextRef| Ok({ #(#stmts)* })
+                    #[coroutine] static move |mut #cx: ::jenner::__private::UnsafeContextRef| Ok({ #(#stmts)* })
                 )
             },
         }
@@ -98,8 +98,13 @@ impl VisitMut for GenVisitor {
                 *i = parse_quote! {{
                     let mut __fut__ = ::jenner::__private::pin::pin!(#base);
                     loop {
-                        let cx = unsafe { #cx.get_context() };
-                        let polled = ::jenner::effective::Effective::poll_effect(__fut__.as_mut(), cx);
+                        let polled = {
+                            // SAFETY: resume supplied this poll's live Context.
+                            // This exclusive reborrow ends before any yield;
+                            // every yield replaces the token before the next use.
+                            let cx = unsafe { #cx.get_context() };
+                            ::jenner::effective::Effective::poll_effect(__fut__.as_mut(), cx)
+                        };
                         match polled {
                             ::jenner::effective::EffectResult::Done(_) => ::core::unreachable!(),
                             ::jenner::effective::EffectResult::Item(x) => break x,
@@ -131,7 +136,7 @@ impl VisitMut for GenVisitor {
             Expr::Try(try_) => {
                 let ExprTry { expr, .. } = try_;
                 *i = parse_quote!(
-                    match ::jenner::effective::SimpleTry::branch(#expr) {
+                    match ::jenner::effective::Fallible::branch(#expr) {
                         ::core::ops::ControlFlow::Continue(x) => x,
                         ::core::ops::ControlFlow::Break(x) => return Err(x),
                     }
@@ -234,8 +239,13 @@ impl GenVisitor {
                 let mut __gen__ = ::jenner::__private::pin::pin!(#expr);
                 #label loop {
                     let __next__ = loop {
-                        let cx = unsafe { #cx.get_context() };
-                        let polled = ::jenner::effective::Effective::poll_effect(__gen__.as_mut(), cx);
+                        let polled = {
+                            // SAFETY: resume supplied this poll's live Context.
+                            // This exclusive reborrow ends before any yield;
+                            // every yield replaces the token before the next use.
+                            let cx = unsafe { #cx.get_context() };
+                            ::jenner::effective::Effective::poll_effect(__gen__.as_mut(), cx)
+                        };
                         match polled {
                             ::jenner::effective::EffectResult::Done(_) => break None,
                             ::jenner::effective::EffectResult::Item(x) => break Some(x),

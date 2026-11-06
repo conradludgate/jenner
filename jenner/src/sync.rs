@@ -1,8 +1,8 @@
-use effective::{Blocking, EffectResult, Effective, EffectiveResult, Failure, Multiple};
+use effective::{Blocking, EffectResult, Effective, Failure, Multiple};
 
 use std::{
     convert::Infallible,
-    ops::{Generator, GeneratorState},
+    ops::{Coroutine, CoroutineState},
     pin::Pin,
 };
 
@@ -28,7 +28,7 @@ impl<G> SyncGeneratorImpl<G> {
         generator: G,
     ) -> impl Effective<Item = Y, Produces = Multiple, Failure = Infallible, Async = Blocking>
     where
-        G: Generator<(), Yield = Y, Return = ()>,
+        G: Coroutine<(), Yield = Y, Return = ()>,
     {
         Self { generator }
     }
@@ -40,7 +40,7 @@ impl<G> SyncFallibleGeneratorImpl<G> {
         generator: G,
     ) -> impl Effective<Item = Y, Produces = Multiple, Failure = Failure<E>, Async = Blocking>
     where
-        G: Generator<(), Yield = Y, Return = Result<(), E>>,
+        G: Coroutine<(), Yield = Y, Return = Result<(), E>>,
     {
         Self { generator }
     }
@@ -48,7 +48,7 @@ impl<G> SyncFallibleGeneratorImpl<G> {
 
 impl<G> Effective for SyncGeneratorImpl<G>
 where
-    G: Generator<(), Return = ()>,
+    G: Coroutine<(), Return = ()>,
 {
     type Item = G::Yield;
     type Failure = Infallible;
@@ -58,17 +58,17 @@ where
     fn poll_effect(
         self: Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
-    ) -> EffectiveResult<Self> {
+    ) -> EffectResult<Self::Item, Self::Failure, Self::Produces, Self::Async> {
         match self.project().generator.resume(()) {
-            GeneratorState::Yielded(x) => EffectResult::Item(x),
-            GeneratorState::Complete(()) => EffectResult::Done(Multiple),
+            CoroutineState::Yielded(x) => EffectResult::Item(x),
+            CoroutineState::Complete(()) => EffectResult::Done(Multiple),
         }
     }
 }
 
 impl<G, E> Effective for SyncFallibleGeneratorImpl<G>
 where
-    G: Generator<(), Return = Result<(), E>>,
+    G: Coroutine<(), Return = Result<(), E>>,
 {
     type Item = G::Yield;
     type Failure = Failure<E>;
@@ -78,11 +78,11 @@ where
     fn poll_effect(
         self: Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
-    ) -> EffectiveResult<Self> {
+    ) -> EffectResult<Self::Item, Self::Failure, Self::Produces, Self::Async> {
         match self.project().generator.resume(()) {
-            GeneratorState::Yielded(x) => EffectResult::Item(x),
-            GeneratorState::Complete(Err(e)) => EffectResult::Failure(Failure(e)),
-            GeneratorState::Complete(Ok(())) => EffectResult::Done(Multiple),
+            CoroutineState::Yielded(x) => EffectResult::Item(x),
+            CoroutineState::Complete(Err(e)) => EffectResult::Failure(Failure(e)),
+            CoroutineState::Complete(Ok(())) => EffectResult::Done(Multiple),
         }
     }
 }

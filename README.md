@@ -1,132 +1,153 @@
 # jenner
 
-A proc-macro to make use of nightly generator syntax in order to create and manipulate
-streams using a much easier syntax, much akin to how async/await futures work today.
+A proc-macro to make use of nightly coroutine syntax in order to create and manipulate
+streams using a much easier syntax, much akin to how async/await futures work.
 
 ## Example
 
 ```rust
-#![feature(generators, generator_trait, never_type, into_future, async_iterator)] // required nightly feature
-use jenner::generator;
-use std::{future::Future, async_iter::AsyncIterator};
+#![feature(coroutines)] // required nightly feature
+use jenner::{effect, effective::{wrappers::future, Async, Effective, EffectiveExt, Multiple}};
+use std::convert::Infallible;
 
 /// Creating brand new streams
-#[generator]
-#[yields(u32)]
-async fn countdown() {
+#[effect(yields)]
+async fn countdown() -> u32 {
     yield 5;
     for i in (0..5).rev() {
         // futures can be awaited in these streams
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        future(tokio::time::sleep(std::time::Duration::from_secs(1))).await;
         // yielding values corresponds to the stream item
         yield i;
     }
 }
 
 /// Consuming streams to create new streams (akin to input.map())
-#[generator]
-#[yields(u32)]
-async fn double(input: impl AsyncIterator<Item = u32>) {
+#[effect(yields)]
+async fn double(
+    input: impl Effective<Item = u32, Failure = Infallible, Produces = Multiple, Async = Async>,
+) -> u32 {
     // custom async for syntax handles the polling of the stream automatically for you
+    #[effect(async)]
     for i in input {
         yield i * 2;
-    }.await;
+    }
 }
 
 /// Futures are also supported
-#[generator]
-async fn collect<T: std::fmt::Debug>(input: impl AsyncIterator<Item = T>) -> Vec<T> {
+#[effect]
+async fn collect<T: std::fmt::Debug>(
+    input: impl Effective<Item = T, Failure = Infallible, Produces = Multiple, Async = Async>,
+) -> Vec<T> {
     let mut v = vec![];
+    #[effect(async)]
     for i in input {
         println!("{:?}", i);
         v.push(i)
-    }.await;
-    /// Return value of the stream is the output of the future
+    }
+    // Return value of the function is the output of the future adapter
     v
 }
 ```
 
 ## Breakdown
 
-The `generator` attribute macro works in a very simple way, making a few simple but crucial transformations.
+The `effect` attribute macro works in a very simple way, making a few simple but crucial transformations.
+The expansion snippets are schematic: `$expr`, `$stream` and `$body` stand for user code.
 
 ### Generator
 
 Firstly, the function signature is re-written to
 
-```rust
-fn countdown() -> impl ::jenner::AsyncGenerator<u32, ()>;
-fn double(input: impl AsyncIterator<Item = u32>) -> impl ::jenner::AsyncGenerator<u32, ()>;
-fn collect(input: impl AsyncIterator<Item = u32>) -> impl ::jenner::AsyncGenerator<!, Vec<u32>>; // never yields
+```rust,ignore
+fn countdown() -> impl Effective<
+    Item = u32, Failure = Infallible, Produces = Multiple, Async = Async,
+>;
+fn double(
+    input: impl Effective<Item = u32, Failure = Infallible, Produces = Multiple, Async = Async>,
+) -> impl Effective<Item = u32, Failure = Infallible, Produces = Multiple, Async = Async>;
+fn collect<T: std::fmt::Debug>(
+    input: impl Effective<Item = T, Failure = Infallible, Produces = Multiple, Async = Async>,
+) -> impl Effective<Item = Vec<T>, Failure = Infallible, Produces = Single, Async = Async>;
 ```
 
-Then, the function body is wrapped in this expression
+Then, a yielding async function's body is wrapped in this expression
+(`$body` stands for the transformed body, and `__cx` for the generated context variable)
 
-```rust
-unsafe {
-    ::jenner::GeneratorImpl::new_async(|mut __cx: ::jenner::UnsafeContextRef|{
+```rust,ignore
+::jenner::__private::AsyncGeneratorImpl::create(
+    #[coroutine]
+    static move |mut __cx: ::jenner::__private::UnsafeContextRef| {
         $body
-    })
-}
+    }
+)
 ```
 
-The `new_async` function is fairly simple.
-It accepts a `Generator<Yield = Poll<Y>, Return = R>` and returns an `AsyncGenerator<Y, R>` type,
-which implements both `AsyncIterator<Item = Y>` and `Future<Output = R>`.
+The `create` function is fairly simple.
+It accepts a `Coroutine<UnsafeContextRef, Yield = Poll<Y>, Return = ()>` and returns
+an `Effective<Item = Y, Failure = Infallible, Produces = Multiple, Async = Async>` value.
+Calling `.shim()` on this value provides a stream. For infallible async functions
+without `yields`, the `AsyncImpl` wrapper provides a single item, and `.shim()`
+provides a future.
 
 ### Yields
 
-Any `yield` keywords in the body are modified from
+Any `yield` keywords in an async body are modified from
 
-```rust
+```rust,ignore
 yield $expr
 ```
 
 into
 
-```rust
-yield Poll::Ready($expr)
+```rust,ignore
+__cx = yield Poll::Ready($expr)
 ```
 
-This allows the generator to tell the stream that a new value is now ready.
+This allows the generator to tell the stream that a value is ready. Resuming
+the generator supplies the context for the next poll, which is assigned to `__cx`.
 
 ### Awaits
 
-Currently, with the state of generators in nightly, you cannot mix `yield`s and `await`s.
-To get around this, the following rule is applied
+Native `.await` syntax is not available inside a coroutine body.
+To get around this, the following rule is applied. The operand is an infallible,
+single-item `Effective`; `wrappers::future` adapts a standard Rust future.
 
 Any `.await` keywords in the body are modified from
 
-```rust
+```rust,ignore
 $expr.await
 ```
 
 into
 
-```rust
+```rust,ignore
 {
-    let fut = $expr;
-    let mut fut = IntoFuture::into_future(fut);
+    let mut fut = ::std::pin::pin!($expr);
     loop {
-        let pinned = unsafe { Pin::new_unchecked(&mut fut) };
-        let polled = Future::poll(pinned, &mut *__cx);
+        let polled = {
+            // The context borrow is confined to this child poll, before any yield.
+            let cx = unsafe { __cx.get_context() };
+            Effective::poll_effect(fut.as_mut(), cx)
+        };
         match polled {
-            Poll::Ready(r) => break r,
-            Poll::Pending => {
-                __cx = yield Poll::Pending,
+            EffectResult::Item(r) => break r,
+            EffectResult::Pending(_) => {
+                __cx = yield Poll::Pending;
             }
+            EffectResult::Done(_) | EffectResult::Failure(_) => unreachable!(),
         }
     }
 }
 ```
 
-This change is quite big in comparison to the `yield`.
+This expansion is quite big in comparison to the `yield`.
 
 We create a loop to allow us to repeatedly poll the future.
 If the future is still pending, then we just yield that back up to the stream.
 This tells the stream that it's currently waiting for some asynchronous task to complete.
 
-If the future's output is now ready, we `break` the value from the loop. This uses the fact
+If the future's output is ready, we `break` the value from the loop. This uses the fact
 that loops are an expression. This allows us to assign the value from the future into our stream's scope.
 
 This is pretty close to how `await` works in regular rust's `async` blocks.
@@ -136,48 +157,40 @@ This is pretty close to how `await` works in regular rust's `async` blocks.
 Iterating over streams is currently a very poor experience.
 Instead, we provide a simple syntax to iterate any generator asynchronously.
 
-```rust
-let output = for i in $stream {
+```rust,ignore
+#[effect(async)]
+for i in $stream {
     $body
-}.await;
+}
 ```
 
-One thing of note, the for loop now returns a value. This is not like standard for loops, but is similar to the `loop` keyword.
-The idea here is that generators both have their iterator part, as well as a final output. We may want to capture that.
-
-However, we cannot rely on the loop completing every time, the user could have their own conditional break statement. We deal
-with this by returning a `jenner::ForResult<Break, Complete>` enum type, not too different from `Result`.
-
-You can use `result.finished()` to turn a `ForResult<Break, Complete>` into `Result<Complete, Break>`. There's also a helper function
-`fn complete(self) -> Complete` if there are no `break`s inside of the loop.
+The loop consumes an infallible asynchronous `Effective` with `Produces = Multiple`.
+Each item is passed to the body, and `EffectResult::Done` finishes the loop.
+An ordinary `break` exits the loop; its output is `()`.
 
 When processed, the code turns into
 
-```rust
+```rust,ignore
 {
-    let gen = #stream; // evaluate the stream
-    let mut gen = {
-        // weak form of specialisation.
-        use ::jenner::{__private::IntoAsyncGenerator, AsyncGenerator};
-        gen.into_async_generator()
-    };
-    let res: ::jenner::ForResult<_, _> = loop {
+    let mut gen = ::std::pin::pin!($stream); // evaluate and pin the stream
+    loop {
         let next = loop {
-            let pinned = unsafe { Pin::new_unchecked(&mut fut) };
-            let polled = AsyncIterator::poll_resume(pinned, &mut* __cx);
+            let polled = {
+                // The context borrow ends before any suspension.
+                let cx = unsafe { __cx.get_context() };
+                Effective::poll_effect(gen.as_mut(), cx)
+            };
             match polled {
-                Poll::Ready(r) => break r,
-                Poll::Pending => {
-                    _cx = yield Poll::Pending;
+                EffectResult::Done(_) => break None,
+                EffectResult::Item(i) => break Some(i),
+                EffectResult::Failure(_) => unreachable!(),
+                EffectResult::Pending(_) => {
+                    __cx = yield Poll::Pending;
                 }
             }
         };
-        match next {
-            GeneratorState::Yielded(i) => #body,
-            GeneratorState::Complete(c) => break ForResult::Complete(c),
-        }
-    };
-    res
+        if let Some(i) = next { $body } else { break };
+    }
 }
 ```
 
@@ -185,42 +198,44 @@ This is pretty similar to the `await` case, but repeated.
 
 ### Futures
 
-While these stream generators are automatically valid futures,
-and edge case occurs when you never actually call `yield` since the
-`Yield` type cannot be inferred from the context.
+An `#[effect] async fn` without `yields` produces a single value. Calling
+`.shim()` adapts it to a future whose output is the function's return type.
+For example, `collect(double(countdown())).shim().await` returns a `Vec<u32>`.
 
-We solve this by counting the number of `yield` statements we see in the body.
-If no `yield` tokens are found, we hard encode the `Yield` type in the function to `()`.
-This is similar to how omitting a return from a function results in `()` being the returned value.
+The `AsyncImpl` wrapper requires `Yield = Poll<Infallible>`, which determines the
+yield type for a function that never yields an item. Its coroutine return value
+becomes `EffectResult::Item`, with `Produces = Single`.
 
 ### Error Handling
 
-Since these generators are also functions that can return value,
-we can use the try `?` syntax to return early from functions.
+Since these effects can fail, we can use the try `?` syntax to return early
+from functions marked `fallible`. With `yields`, the success type in the return
+annotation describes the yielded items.
 
 ```rust
-#[generator]
-#[yields(u32)]
-fn make_requests() -> Result<(), &'static str> {
+#![feature(coroutines)]
+use jenner::{effect, effective::wrappers::future};
+
+#[effect(yields, fallible)]
+async fn make_requests() -> Result<u32, &'static str> {
     for i in 0..5 {
-        let resp = async move {
+        let resp = future(async move {
             // imagine this makes a http request that could fail
             let req = if i == 4 { Err("4 is a random number") } else { Ok(i) };
             req
-        }.await;
+        }).await;
 
         // Using the `?` syntax to return early with the error
         // but continue with any good values. (can be used anywhere and not exclusively with yields)
         yield resp?;
     }
-
-    // we don't care about the return value, but rust needs one anyway
-    Ok(())
 }
 ```
 
-This requires no extra special code, except for ensuring that the return type is well defined.
-In this case, that's performed by ensuring the return value is both `AsyncIterator + Future`, specifying the
-output of the future to be a result.
+The fallible wrapper maps the coroutine's `Err` return to `EffectResult::Failure`.
+Successful completion is wrapped in `Ok` by the macro; a yielding function's body
+finishes with `()`.
 
-This is also not exclusive to `Result`, any it supports anything that the regular `try` syntax supports.
+For an asynchronous effect, `?` is expanded through `effective::Fallible::branch`:
+continuation values remain in the body, and failures return `Err` from the coroutine.
+The helper traits determine the item and failure types from the return annotation.
